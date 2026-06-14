@@ -266,6 +266,17 @@ final class MandelbrotCoreTests: XCTestCase {
         }
     }
 
+    /// The self-test fault injection must actually drive the detector: with
+    /// injectFault on, the lockstep engine should report divergences and name
+    /// the perturbed op (`zx'`). Guards the "watch it go red" demo path.
+    func testLockstepSelfTestInjectionIsDetected() {
+        let comp = LockstepDiffEngine(injectFault: true).renderLockstepDiff(
+            viewport: Viewport.defaultView(width: 200, height: 200),
+            width: 200, height: 200, maxIterations: 256)
+        XCTAssertGreaterThan(comp.mismatchCount, 0, "injected fault must be detected")
+        XCTAssertEqual(comp.firstDivergence?.label, "zx'")
+    }
+
     func testViewportRoundTrip() {
         let v = Viewport(centerX: -0.5, centerY: 0.0, pixelSize: 0.01)
         let (wx, wy) = v.coordinate(atPixelX: 100, pixelY: 50, width: 200, height: 100)
