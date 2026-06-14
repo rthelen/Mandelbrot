@@ -124,6 +124,14 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            if let split = viewModel.hybridSplit {
+                HStack {
+                    Text("⇄ hybrid split: \(split)")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.teal)
+                    Spacer()
+                }
+            }
             if let detail = viewModel.divergenceDetail {
                 HStack {
                     Text("⚠ \(detail)")

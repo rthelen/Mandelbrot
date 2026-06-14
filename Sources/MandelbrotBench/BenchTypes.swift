@@ -30,6 +30,7 @@ enum KernelName: String, Codable, CaseIterable {
     case float128Metal = "float128-metal"
     case float128LimbMetal = "float128-lf-metal"
     case float128UnpackedMetal = "float128-u-metal"
+    case float128Hybrid = "float128-hybrid"
 }
 
 struct RunConfig: Codable {

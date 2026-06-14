@@ -540,6 +540,25 @@ final class MandelbrotCoreTests: XCTestCase {
         }
     }
 
+    /// The hybrid CPU+GPU engine must produce a field identical to the pure CPU
+    /// Float128 render — the split boundary must not introduce seams or gaps.
+    func testHybridFloat128MatchesCPU() throws {
+        let cpu = CPUEngine(kernel: Float128StripKernel())
+        let hybrid = HybridFloat128Engine(initialGPUFraction: 0.5)   // force a real split
+        let vp = Viewport(centerX: -0.743643887037151, centerY: 0.131825904205330, pixelSize: 1e-18)
+        let (w, h) = (200, 160)
+        // Run a few frames so the split adapts; each must still be exact.
+        for _ in 0..<3 {
+            let hf = hybrid.render(viewport: vp, width: w, height: h, maxIterations: 600)
+            let cf = cpu.render(viewport: vp, width: w, height: h, maxIterations: 600)
+            var bad = 0
+            hf.withBufferPointer { hb in cf.withBufferPointer { cb in
+                for i in 0..<(w*h) where hb[i].iterations != cb[i].iterations { bad += 1 }
+            }}
+            XCTAssertEqual(bad, 0, "hybrid field must match pure CPU Float128 (splitRow=\(hybrid.lastSplitRow))")
+        }
+    }
+
     func testViewportRoundTrip() {
         let v = Viewport(centerX: -0.5, centerY: 0.0, pixelSize: 0.01)
         let (wx, wy) = v.coordinate(atPixelX: 100, pixelY: 50, width: 200, height: 100)

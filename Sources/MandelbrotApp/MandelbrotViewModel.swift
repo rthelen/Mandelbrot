@@ -20,6 +20,7 @@ enum KernelChoice: String, CaseIterable, Identifiable, Sendable {
     case selfTestCPU = "⚠ Self-test (inject fault)"
     case float128CPU = "Float128 (CPU)"
     case float128Metal = "Float128 (Metal GPU)"
+    case float128Hybrid = "Float128 (Hybrid CPU+GPU)"
     var id: String { rawValue }
 
     /// How this mode compares HW vs SW (drives the render path).
@@ -46,6 +47,9 @@ enum KernelChoice: String, CaseIterable, Identifiable, Sendable {
         case .doubleDiffCPU, .doubleLockstepCPU, .selfTestCPU: return CPUEngine(kernel: DoubleStripKernel())
         case .float128CPU: return CPUEngine(kernel: Float128StripKernel())
         case .float128Metal: return MetalFloat128UnpackedEngine()   // unpacked: ~15% faster, bit-identical
+        // Hybrid uses a persistent engine held by the view model (so it adapts
+        // across frames); this branch is never reached for it.
+        case .float128Hybrid: return MetalFloat128UnpackedEngine()
         }
     }
 
@@ -65,6 +69,7 @@ enum KernelChoice: String, CaseIterable, Identifiable, Sendable {
         case .selfTestCPU:     return 1e-13
         case .float128CPU:     return 1e-31
         case .float128Metal:   return 1e-31
+        case .float128Hybrid:  return 1e-31
         }
     }
 }
@@ -150,6 +155,10 @@ final class MandelbrotViewModel: ObservableObject {
 
     let colorizers: [any Colorizer] = AvailableColorizers.all()
 
+    /// Persistent so its adaptive CPU/GPU split survives across frames.
+    private let hybridFloat128 = HybridFloat128Engine()
+    @Published var hybridSplit: String? = nil
+
     private var canvasWidth: Int = 0
     private var canvasHeight: Int = 0
     private var pendingRequest: RenderRequest?
@@ -178,7 +187,7 @@ final class MandelbrotViewModel: ObservableObject {
     func renderRequested() {
         guard canvasWidth > 0, canvasHeight > 0 else { return }
         let req = RenderRequest(
-            engine: kernelChoice.engine,
+            engine: kernelChoice == .float128Hybrid ? hybridFloat128 : kernelChoice.engine,
             colorizer: colorizers[colorizerIndex],
             viewport: viewport,
             width: canvasWidth,
@@ -208,6 +217,14 @@ final class MandelbrotViewModel: ObservableObject {
             if n > peakMismatchCount { peakMismatchCount = n }
             if n > 0 && peakMismatchFrame == nil { peakMismatchFrame = playbackFrameCount }
         }
+        if kernelChoice == .float128Hybrid {
+            let pct = Int((hybridFloat128.currentGPUFraction * 100).rounded())
+            hybridSplit = String(format: "GPU %d%% / CPU %d%%  ·  GPU %.0f ms, CPU %.0f ms",
+                                 pct, 100 - pct, hybridFloat128.lastGPUms, hybridFloat128.lastCPUms)
+        } else {
+            hybridSplit = nil
+        }
+
         // Latch the first per-step divergence detail seen this run.
         if let d = result.divergence, divergenceDetail == nil {
             divergenceDetail = String(

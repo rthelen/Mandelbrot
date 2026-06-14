@@ -97,6 +97,69 @@ func float128PixelOrigins(
     return (cxFlat, cyFlat)
 }
 
+/// Renders global rows [rowStart, rowStart+rowCount) of `viewport` on the GPU
+/// (unpacked Parts128 kernel) into `field` at those rows. Falls back to the CPU
+/// band renderer if there's no Metal device. Used by the hybrid engine.
+public func gpuFloat128RenderBand(viewport: Viewport, width: Int, totalHeight: Int,
+                                  rowStart: Int, rowCount: Int, maxIterations: UInt32,
+                                  into field: IterationField) {
+    guard rowCount > 0 else { return }
+    guard let ctx = MetalContext.shared,
+          (try? gpuRenderBandImpl(ctx: ctx, viewport: viewport, width: width, totalHeight: totalHeight,
+                                  rowStart: rowStart, rowCount: rowCount,
+                                  maxIterations: maxIterations, into: field)) != nil
+    else {
+        cpuFloat128RenderBand(viewport: viewport, width: width, totalHeight: totalHeight,
+                              rowStart: rowStart, rowCount: rowCount, maxIterations: maxIterations, into: field)
+        return
+    }
+}
+
+private func gpuRenderBandImpl(ctx: MetalContext, viewport: Viewport, width: Int, totalHeight: Int,
+                              rowStart: Int, rowCount: Int, maxIterations: UInt32,
+                              into field: IterationField) throws {
+    // Full-width cx; cy only for the band's global rows.
+    let (cxHL, cyHLfull) = float128PixelOrigins(viewport: viewport, width: width, height: totalHeight, stripW: 32)
+    var cxFlat = cxHL
+    var cyBand = Array(cyHLfull[(2 * rowStart)..<(2 * (rowStart + rowCount))])
+    var dims = SIMD2<UInt32>(UInt32(width), UInt32(rowCount))
+    var maxIter = maxIterations
+    let dev = ctx.device
+    let pipe = try ctx.pipeline("mandelbrot_f128u")
+    let bandPixels = width * rowCount
+
+    guard
+        let cxBuf = dev.makeBuffer(bytes: &cxFlat, length: cxFlat.count * 8, options: .storageModeShared),
+        let cyBuf = dev.makeBuffer(bytes: &cyBand, length: cyBand.count * 8, options: .storageModeShared),
+        let iterBuf = dev.makeBuffer(length: bandPixels * 4, options: .storageModeShared),
+        let smoothBuf = dev.makeBuffer(length: bandPixels * 4, options: .storageModeShared),
+        let cmd = ctx.queue.makeCommandBuffer(),
+        let enc = cmd.makeComputeCommandEncoder()
+    else { throw MetalSetupError.noDevice }
+
+    enc.setComputePipelineState(pipe)
+    enc.setBuffer(cxBuf, offset: 0, index: 0)
+    enc.setBuffer(cyBuf, offset: 0, index: 1)
+    enc.setBytes(&dims, length: MemoryLayout<SIMD2<UInt32>>.size, index: 2)
+    enc.setBytes(&maxIter, length: 4, index: 3)
+    enc.setBuffer(iterBuf, offset: 0, index: 4)
+    enc.setBuffer(smoothBuf, offset: 0, index: 5)
+    enc.dispatchThreads(MTLSize(width: width, height: rowCount, depth: 1),
+                        threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
+    enc.endEncoding()
+    cmd.commit()
+    cmd.waitUntilCompleted()
+    if let err = cmd.error { throw MetalSetupError.libraryCompile("\(err)") }
+
+    let iterPtr = iterBuf.contents().assumingMemoryBound(to: UInt32.self)
+    let smoothPtr = smoothBuf.contents().assumingMemoryBound(to: Float32.self)
+    for r in 0..<rowCount {
+        let dst = field.pointer(row: rowStart + r)
+        let src = r * width
+        for c in 0..<width { dst[c] = PixelResult(iterations: iterPtr[src + c], smooth: smoothPtr[src + c]) }
+    }
+}
+
 /// Float128 GPU engine that keeps values in unpacked Parts128 (64-bit limbs)
 /// across the iteration — isolates the pack/unpack-elimination win.
 public struct MetalFloat128UnpackedEngine: MandelbrotEngine {
