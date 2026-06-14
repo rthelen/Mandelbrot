@@ -81,14 +81,14 @@ func bitsFromParts(_ p: Float128Parts, sticky stickyIn: Bool = false) -> UInt128
     // Now: bit 113 = carry slot, bit 112 = implied 1, bits 111..0 = stored mantissa.
 
     let ulpBit = (mantissa & 1) != 0
-    if roundBit && (ulpBit || sticky) {
-        mantissa = mantissa &+ 1
-        // Cascade: did the implied bit move from 112 to 113?
-        if ((mantissa >> 113) & 1) != 0 {
-            mantissa >>= 1
-            exp += 1
-        }
-    }
+    // Round-to-nearest-even, branchless: compute the rounded mantissa and select.
+    let roundUp = roundBit && (ulpBit || sticky)
+    let bumped = roundUp ? (mantissa &+ 1) : mantissa
+    // Cascade only when the +1 overflowed the implied bit (112 -> 113); when no
+    // round-up happened bit 113 is 0, so this is a no-op then.
+    let cascade = ((bumped >> 113) & 1) != 0
+    mantissa = cascade ? (bumped >> 1) : bumped
+    exp = cascade ? (exp + 1) : exp
 
     let biased = exp + kF128ExpBias
     if biased <= 0 {
@@ -106,9 +106,7 @@ func bitsFromParts(_ p: Float128Parts, sticky stickyIn: Bool = false) -> UInt128
 
     let biasedU = UInt128(UInt32(biased) & kF128ExpMaxBits)
     let storedMantissa = mantissa & kF128MantissaMask
-    var bits: UInt128 = (biasedU << 112) | storedMantissa
-    if p.sign { bits |= kF128SignMask }
-    return bits
+    return (biasedU << 112) | storedMantissa | (p.sign ? kF128SignMask : 0)
 }
 
 // MARK: - Helpers
@@ -166,13 +164,9 @@ func addParts(_ a: Float128Parts, _ b: Float128Parts) -> (Float128Parts, sticky:
         return (.zero, false)
     }
 
-    var resultExp = lhs.exp
     let clz = resultMantissa.leadingZeroBitCount
-    if clz == 0 {
-        resultExp += 1
-    } else if clz > 1 {
-        resultExp -= clz - 1
-    }
+    // Branchless exponent adjust: +1 if clz==0, else -(clz-1) (which is 0 at clz==1).
+    let resultExp = lhs.exp + (clz == 0 ? 1 : -(clz - 1))
     return (Float128Parts(sign: lhs.sign, exp: resultExp, mantissa: resultMantissa &<< clz),
             false)
 }
@@ -190,20 +184,13 @@ func multiplyParts(_ a: Float128Parts, _ b: Float128Parts) -> (Float128Parts, st
     }
 
     let (hi, lo) = a.mantissa.multipliedFullWidth(by: b.mantissa)
-    var resultMantissa = hi
-    var resultExp = a.exp + b.exp
-    var sticky: Bool
-
-    if ((resultMantissa >> 127) & 1) != 0 {
-        // Carry into bit 255 of the product: leading 1 already at bit 127 of `hi`.
-        resultExp += 1
-        sticky = lo != 0
-    } else {
-        // Leading 1 at bit 126 of `hi`; shift left by 1, pulling in MSB of lo.
-        let loMsb = (lo >> 127) & 1
-        resultMantissa = (resultMantissa &<< 1) | loMsb
-        sticky = (lo & ((UInt128(1) << 127) &- 1)) != 0
-    }
+    // Product leading 1 is at bit 255 (topSet) or 254. Compute both normalizations
+    // and select — branchless, no data-dependent branch on the ~50/50 carry.
+    let topSet = ((hi >> 127) & 1) != 0
+    let loMsb = (lo >> 127) & 1
+    let resultMantissa = topSet ? hi : ((hi &<< 1) | loMsb)
+    let resultExp = a.exp + b.exp + (topSet ? 1 : 0)
+    let sticky = topSet ? (lo != 0) : ((lo & ((UInt128(1) << 127) &- 1)) != 0)
 
     return (Float128Parts(sign: resultSign, exp: resultExp, mantissa: resultMantissa),
             sticky)

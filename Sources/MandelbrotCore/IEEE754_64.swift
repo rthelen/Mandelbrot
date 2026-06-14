@@ -90,14 +90,14 @@ func bitsFromParts64(_ p: SoftDoubleParts, sticky stickyIn: Bool = false) -> UIn
     // Now: bit 53 = carry slot, bit 52 = implied 1, bits 51..0 = stored mantissa.
 
     let ulpBit = (mantissa & 1) != 0
-    if roundBit && (ulpBit || sticky) {
-        mantissa = mantissa &+ 1
-        // Cascade: did the implied bit move from 52 to 53?
-        if ((mantissa >> 53) & 1) != 0 {
-            mantissa >>= 1
-            exp += 1
-        }
-    }
+    // Round-to-nearest-even, branchless: compute the rounded mantissa and select.
+    let roundUp = roundBit && (ulpBit || sticky)
+    let bumped = roundUp ? (mantissa &+ 1) : mantissa
+    // Cascade only when the +1 overflowed the implied bit (52 -> 53); when no
+    // round-up happened bit 53 is 0, so this is a no-op then.
+    let cascade = ((bumped >> 53) & 1) != 0
+    mantissa = cascade ? (bumped >> 1) : bumped
+    exp = cascade ? (exp + 1) : exp
 
     let biased = exp + kF64ExpBias
     if biased <= 0 {
@@ -115,9 +115,7 @@ func bitsFromParts64(_ p: SoftDoubleParts, sticky stickyIn: Bool = false) -> UIn
 
     let biasedU = UInt64(UInt32(biased) & kF64ExpMaxBits)
     let storedMantissa = mantissa & kF64MantissaMask
-    var bits: UInt64 = (biasedU << 52) | storedMantissa
-    if p.sign { bits |= kF64SignMask }
-    return bits
+    return (biasedU << 52) | storedMantissa | (p.sign ? kF64SignMask : 0)
 }
 
 // MARK: - Helpers
@@ -175,13 +173,9 @@ func addParts64(_ a: SoftDoubleParts, _ b: SoftDoubleParts) -> (SoftDoubleParts,
         return (.zero, false)
     }
 
-    var resultExp = lhs.exp
     let clz = resultMantissa.leadingZeroBitCount
-    if clz == 0 {
-        resultExp += 1
-    } else if clz > 1 {
-        resultExp -= clz - 1
-    }
+    // Branchless exponent adjust: +1 if clz==0, else -(clz-1) (which is 0 at clz==1).
+    let resultExp = lhs.exp + (clz == 0 ? 1 : -(clz - 1))
     return (SoftDoubleParts(sign: lhs.sign, exp: resultExp, mantissa: resultMantissa &<< clz),
             false)
 }
@@ -199,20 +193,13 @@ func multiplyParts64(_ a: SoftDoubleParts, _ b: SoftDoubleParts) -> (SoftDoubleP
     }
 
     let (hi, lo) = a.mantissa.multipliedFullWidth(by: b.mantissa)
-    var resultMantissa = hi
-    var resultExp = a.exp + b.exp
-    var sticky: Bool
-
-    if ((resultMantissa >> 63) & 1) != 0 {
-        // Carry into bit 127 of the product: leading 1 already at bit 63 of `hi`.
-        resultExp += 1
-        sticky = lo != 0
-    } else {
-        // Leading 1 at bit 62 of `hi`; shift left by 1, pulling in MSB of lo.
-        let loMsb = (lo >> 63) & 1
-        resultMantissa = (resultMantissa &<< 1) | loMsb
-        sticky = (lo & ((UInt64(1) << 63) &- 1)) != 0
-    }
+    // Product leading 1 is at bit 127 (topSet) or 126. Compute both normalizations
+    // and select — branchless, no data-dependent branch on the ~50/50 carry.
+    let topSet = ((hi >> 63) & 1) != 0
+    let loMsb = (lo >> 63) & 1
+    let resultMantissa = topSet ? hi : ((hi &<< 1) | loMsb)
+    let resultExp = a.exp + b.exp + (topSet ? 1 : 0)
+    let sticky = topSet ? (lo != 0) : ((lo & ((UInt64(1) << 63) &- 1)) != 0)
 
     return (SoftDoubleParts(sign: resultSign, exp: resultExp, mantissa: resultMantissa),
             sticky)
