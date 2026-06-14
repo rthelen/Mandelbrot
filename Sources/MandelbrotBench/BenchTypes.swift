@@ -28,6 +28,8 @@ enum KernelName: String, Codable, CaseIterable {
     case softDoubleMetal = "softdouble-metal"
     case float128 = "float128"
     case float128Metal = "float128-metal"
+    case float128LimbMetal = "float128-lf-metal"
+    case float128UnpackedMetal = "float128-u-metal"
 }
 
 struct RunConfig: Codable {

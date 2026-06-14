@@ -230,3 +230,64 @@ kernel void lf\(tag)_op_test(device const uint *a      [[buffer(0)]],
 /// The two instantiations we validate against the existing references.
 let limbFloat4MSL = limbFloatMSL(tag: "4", K: 4, expBits: 15, bias: 16383)   // binary128
 let limbFloat2MSL = limbFloatMSL(tag: "2", K: 2, expBits: 11, bias: 1023)    // binary64
+
+/// Mandelbrot iteration kept entirely in unpacked LF4 form — values are LF4
+/// structs across the whole loop, never packed to bits between ops. This is the
+/// point of the format: the per-op unpack/repack tax is gone.
+let mandelbrotLF4MSL = """
+
+static LF4 lf4_sub(LF4 a, LF4 b) { b.s ^= 1u; return lf4_add(a, b); }
+// 2*a: increment the unbiased exponent (exact, no rounding). Zero stays zero.
+static LF4 lf4_double(LF4 a) { if (!lf4_zero(a.m)) a.e += 1; return a; }
+// a > b for non-negative a, b. Zero handled via the mantissa, not the exponent.
+static bool lf4_gt_pos(LF4 a, LF4 b) {
+    if (lf4_zero(a.m)) return false;
+    if (a.e != b.e) return a.e > b.e;
+    for (int i = 3; i >= 0; --i) if (a.m[i] != b.m[i]) return a.m[i] > b.m[i];
+    return false;
+}
+static float lf4_to_float(LF4 a) {
+    if (lf4_zero(a.m)) return 0.0f;
+    float m = 1.0f + (float)((a.m[3] & 0x7FFFFFFFu) >> 8) * (1.0f / 8388608.0f);
+    return m * exp2((float)a.e);
+}
+constant float LF4_LOG2 = 0.69314718055994531f;
+
+kernel void mandelbrot_lf4(device const uint *cxArr   [[buffer(0)]],
+                           device const uint *cyArr   [[buffer(1)]],
+                           constant uint2    &dims    [[buffer(2)]],
+                           constant uint     &maxIter [[buffer(3)]],
+                           device uint       *outIter [[buffer(4)]],
+                           device float      *outSmooth [[buffer(5)]],
+                           uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= dims.x || gid.y >= dims.y) return;
+    uint cxl[4], cyl[4];
+    for (int i = 0; i < 4; ++i) { cxl[i] = cxArr[gid.x * 4 + i]; cyl[i] = cyArr[gid.y * 4 + i]; }
+    LF4 cx = lf4_unpack(cxl);
+    LF4 cy = lf4_unpack(cyl);
+    LF4 four; four.m[0] = 0; four.m[1] = 0; four.m[2] = 0; four.m[3] = 0x80000000u; four.e = 2; four.s = 0;
+
+    LF4 zx = lf4_zeroval(0u), zy = lf4_zeroval(0u), magSq = lf4_zeroval(0u);
+    uint n = 0;
+    while (n < maxIter) {
+        LF4 zx2 = lf4_mul(zx, zx);
+        LF4 zy2 = lf4_mul(zy, zy);
+        magSq = lf4_add(zx2, zy2);
+        if (lf4_gt_pos(magSq, four)) break;
+        LF4 nzx = lf4_add(lf4_sub(zx2, zy2), cx);
+        LF4 nzy = lf4_add(lf4_double(lf4_mul(zx, zy)), cy);
+        zx = nzx; zy = nzy;
+        n += 1;
+    }
+    uint idx = gid.y * dims.x + gid.x;
+    if (n < maxIter) {
+        outIter[idx] = n;
+        float mag = lf4_to_float(magSq);
+        float logZn = 0.5f * log(mag);
+        outSmooth[idx] = 1.0f - log(logZn / LF4_LOG2) / LF4_LOG2;
+    } else {
+        outIter[idx] = 0xFFFFFFFF;
+        outSmooth[idx] = 0.0f;
+    }
+}
+"""

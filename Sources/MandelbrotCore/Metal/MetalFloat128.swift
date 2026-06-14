@@ -97,6 +97,16 @@ func float128PixelOrigins(
     return (cxFlat, cyFlat)
 }
 
+/// Float128 GPU engine that keeps values in unpacked Parts128 (64-bit limbs)
+/// across the iteration — isolates the pack/unpack-elimination win.
+public struct MetalFloat128UnpackedEngine: MandelbrotEngine {
+    public init() {}
+    public func render(viewport: Viewport, width: Int, height: Int, maxIterations: UInt32) -> IterationField {
+        MetalFloat128Engine(kernelName: "mandelbrot_f128u")
+            .render(viewport: viewport, width: width, height: height, maxIterations: maxIterations)
+    }
+}
+
 /// Profiles the `mandelbrot_f128` kernel: reports the pipeline's occupancy
 /// limits and sweeps threadgroup shapes, timing each with GPU timestamps.
 public func profileFloat128(
@@ -150,7 +160,9 @@ public func profileFloat128(
 /// uploaded as (hi, lo) limb pairs, and iterated on the GPU. Falls back to the
 /// CPU Float128 kernel when no Metal device is present.
 public struct MetalFloat128Engine: MandelbrotEngine {
-    public init() {}
+    let kernelName: String
+    public init() { self.kernelName = "mandelbrot_f128" }
+    init(kernelName: String) { self.kernelName = kernelName }
 
     private static let stripW = 32
 
@@ -179,7 +191,7 @@ public struct MetalFloat128Engine: MandelbrotEngine {
         var dims = SIMD2<UInt32>(UInt32(width), UInt32(height))
         var maxIter = maxIterations
         let dev = ctx.device
-        let pipe = try ctx.pipeline("mandelbrot_f128")
+        let pipe = try ctx.pipeline(kernelName)
         let pixelCount = width * height
 
         guard

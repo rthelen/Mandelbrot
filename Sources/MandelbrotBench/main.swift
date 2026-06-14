@@ -92,6 +92,8 @@ func runCell(target: PlaybackTarget, kernel: KernelName, iters: UInt32,
     case .softDoubleMetal: engine = MetalSoftDouble64Engine()
     case .float128:        engine = CPUEngine(kernel: Float128StripKernel())
     case .float128Metal:   engine = MetalFloat128Engine()
+    case .float128LimbMetal: engine = MetalLimbFloat128Engine()
+    case .float128UnpackedMetal: engine = MetalFloat128UnpackedEngine()
     }
 
     let label = "\(slug(target.name))-\(kernel.rawValue)-\(iters)"

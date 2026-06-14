@@ -496,6 +496,50 @@ final class MandelbrotCoreTests: XCTestCase {
         XCTAssertEqual(mulBad, 0, "limbfloat<2> mul must match SoftDouble")
     }
 
+    /// The unpacked Parts128 (64-bit limb) kernel must match CPU Float128 on
+    /// every pixel — the faster variant must still be bit-exact.
+    func testGPUFloat128UnpackedMatchesCPU() throws {
+        guard MetalContext.shared != nil else { throw XCTSkip("No Metal device available") }
+        let gpu = MetalFloat128UnpackedEngine()
+        let cpu = CPUEngine(kernel: Float128StripKernel())
+        let cases: [(Viewport, Int, Int, UInt32)] = [
+            (Viewport.defaultView(width: 256, height: 192), 256, 192, 512),
+            (Viewport(centerX: -0.743643887037151, centerY: 0.131825904205330,
+                      pixelSize: 1e-20), 256, 192, 1024),
+        ]
+        for (vp, w, h, iters) in cases {
+            let g = gpu.render(viewport: vp, width: w, height: h, maxIterations: iters)
+            let c = cpu.render(viewport: vp, width: w, height: h, maxIterations: iters)
+            var bad = 0
+            g.withBufferPointer { gb in c.withBufferPointer { cb in
+                for i in 0..<(w*h) where gb[i].iterations != cb[i].iterations { bad += 1 }
+            }}
+            XCTAssertEqual(bad, 0, "unpacked Parts128 kernel must match Float128 (px=\(vp.pixelSize.asDouble))")
+        }
+    }
+
+    /// The unpacked-LimbFloat Mandelbrot kernel must match CPU Float128 on every
+    /// pixel's iteration count — shallow and deep past Double's wall.
+    func testGPULimbFloat128MandelbrotMatchesCPU() throws {
+        guard MetalContext.shared != nil else { throw XCTSkip("No Metal device available") }
+        let gpu = MetalLimbFloat128Engine()
+        let cpu = CPUEngine(kernel: Float128StripKernel())
+        let cases: [(Viewport, Int, Int, UInt32)] = [
+            (Viewport.defaultView(width: 256, height: 192), 256, 192, 512),
+            (Viewport(centerX: -0.743643887037151, centerY: 0.131825904205330,
+                      pixelSize: 1e-20), 256, 192, 1024),
+        ]
+        for (vp, w, h, iters) in cases {
+            let g = gpu.render(viewport: vp, width: w, height: h, maxIterations: iters)
+            let c = cpu.render(viewport: vp, width: w, height: h, maxIterations: iters)
+            var bad = 0
+            g.withBufferPointer { gb in c.withBufferPointer { cb in
+                for i in 0..<(w*h) where gb[i].iterations != cb[i].iterations { bad += 1 }
+            }}
+            XCTAssertEqual(bad, 0, "LimbFloat kernel must match Float128 (px=\(vp.pixelSize.asDouble))")
+        }
+    }
+
     func testViewportRoundTrip() {
         let v = Viewport(centerX: -0.5, centerY: 0.0, pixelSize: 0.01)
         let (wx, wy) = v.coordinate(atPixelX: 100, pixelY: 50, width: 200, height: 100)

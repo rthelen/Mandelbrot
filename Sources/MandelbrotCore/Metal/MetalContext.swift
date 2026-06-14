@@ -41,7 +41,7 @@ public final class MetalContext: @unchecked Sendable {
             // Soft-64 first (defines sd_mul64 etc.), then soft-128 appended as
             // one translation unit.
             let source = softDouble64MSLSource + float128MSLSource
-                + limbFloat2MSL + limbFloat4MSL
+                + limbFloat2MSL + limbFloat4MSL + mandelbrotLF4MSL
             self.library = try dev.makeLibrary(source: source, options: nil)
         } catch {
             throw MetalSetupError.libraryCompile("\(error)")

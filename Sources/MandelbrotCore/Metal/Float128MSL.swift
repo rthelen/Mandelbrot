@@ -317,6 +317,81 @@ kernel void mandelbrot_f128(device const ulong *cxArr   [[buffer(0)]],
     }
 }
 
+// Round an unrounded Parts (leading 1 at bit 127 + incoming sticky) to 113 bits,
+// staying in Parts form (no pack to bits). Equivalent to unpack(pack(p)) but
+// without the bit shuffle — this is what lets the iteration stay unpacked.
+static Parts128 f128_round_parts(Parts128 p, bool stickyIn) {
+    if (u128_is_zero(p.mant)) return p;
+    bool sticky = stickyIn || ((p.mant.lo & 1) != 0);
+    u128 mant = u128_shr(p.mant, 1);
+    int e = p.exp;
+    ulong stickyMask = (((ulong)1) << 13) - 1;
+    sticky = sticky || ((mant.lo & stickyMask) != 0);
+    bool roundBit = ((mant.lo >> 13) & 1) != 0;
+    mant = u128_shr(mant, 14);              // leading 1 now at bit 112
+    bool ulp = (mant.lo & 1) != 0;
+    if (roundBit && (ulp || sticky)) {
+        mant = u128_add(mant, u128_make(0, 1));
+        if (((mant.hi >> 49) & 1) != 0) { mant = u128_shr(mant, 1); e += 1; }
+    }
+    Parts128 r; r.sign = p.sign; r.exp = e; r.mant = u128_shl(mant, 15); return r;  // re-justify to bit 127
+}
+static Parts128 f128_neg_parts(Parts128 p) { p.sign = !p.sign; return p; }
+static bool f128_parts_gt_pos(Parts128 a, Parts128 b) {     // both non-negative
+    if (u128_is_zero(a.mant)) return false;
+    if (a.exp != b.exp) return a.exp > b.exp;
+    return u128_gt(a.mant, b.mant);
+}
+static float f128_parts_to_float(Parts128 a) {
+    if (u128_is_zero(a.mant)) return 0.0f;
+    float m = 1.0f + (float)((a.mant.hi >> 40) & 0x7FFFFF) * (1.0f / 8388608.0f);
+    return m * exp2((float)a.exp);
+}
+
+// Mandelbrot kept in UNPACKED Parts128 (64-bit limbs) across the whole loop —
+// the decisive test of pack/unpack elimination without the 32-bit-limb overhead.
+kernel void mandelbrot_f128u(device const ulong *cxArr   [[buffer(0)]],
+                             device const ulong *cyArr   [[buffer(1)]],
+                             constant uint2    &dims     [[buffer(2)]],
+                             constant uint     &maxIter  [[buffer(3)]],
+                             device uint       *outIter  [[buffer(4)]],
+                             device float      *outSmooth [[buffer(5)]],
+                             uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= dims.x || gid.y >= dims.y) return;
+    Parts128 cx = f128_unpack(u128_make(cxArr[2 * gid.x], cxArr[2 * gid.x + 1]));
+    Parts128 cy = f128_unpack(u128_make(cyArr[2 * gid.y], cyArr[2 * gid.y + 1]));
+    Parts128 four; four.sign = false; four.exp = 2; four.mant = u128_make(((ulong)1) << 63, 0);
+
+    Parts128 zx, zy, magSq;
+    zx.sign = false; zx.exp = 0; zx.mant = u128_make(0, 0);
+    zy = zx; magSq = zx;
+    uint n = 0;
+    bool s;
+    while (n < maxIter) {
+        Parts128 zx2 = f128_round_parts(f128_sqr_parts(zx, s), s);
+        Parts128 zy2 = f128_round_parts(f128_sqr_parts(zy, s), s);
+        magSq = f128_round_parts(f128_add_parts(zx2, zy2, s), s);
+        if (f128_parts_gt_pos(magSq, four)) break;
+        Parts128 diff = f128_round_parts(f128_add_parts(zx2, f128_neg_parts(zy2), s), s);
+        Parts128 nzx = f128_round_parts(f128_add_parts(diff, cx, s), s);
+        Parts128 prod = f128_round_parts(f128_mul_parts(zx, zy, s), s);
+        if (!u128_is_zero(prod.mant)) prod.exp += 1;     // 2*zx*zy
+        Parts128 nzy = f128_round_parts(f128_add_parts(prod, cy, s), s);
+        zx = nzx; zy = nzy;
+        n += 1;
+    }
+    uint idx = gid.y * dims.x + gid.x;
+    if (n < maxIter) {
+        outIter[idx] = n;
+        float mag = f128_parts_to_float(magSq);
+        float logZn = 0.5f * log(mag);
+        outSmooth[idx] = 1.0f - log(logZn / F128_LOG2) / F128_LOG2;
+    } else {
+        outIter[idx] = 0xFFFFFFFF;
+        outSmooth[idx] = 0.0f;
+    }
+}
+
 // Arithmetic self-test: a+b and a*b in software binary128 (2 ulongs per value).
 kernel void f128_op_test(device const ulong *a      [[buffer(0)]],
                          device const ulong *b      [[buffer(1)]],
