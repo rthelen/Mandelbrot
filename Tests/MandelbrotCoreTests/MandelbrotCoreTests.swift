@@ -431,6 +431,71 @@ final class MandelbrotCoreTests: XCTestCase {
         }
     }
 
+    /// The parameterized limb-float (K=4, binary128 params) must reproduce CPU
+    /// Float128 add/mul bit-for-bit — the new format validated against a known
+    /// reference. Same generic limb code, just K=4.
+    func testGPULimbFloat4MatchesFloat128() throws {
+        guard MetalContext.shared != nil else { throw XCTSkip("No Metal device available") }
+        var state: UInt64 = 0xABCDEF0123456789
+        func next64() -> UInt64 { state = state &* 6364136223846793005 &+ 1442695040888963407; return state }
+        func randomNormal128() -> UInt128 {
+            let sign = UInt128(next64() & 1) << 127
+            let exp = UInt128(8000 + (next64() % 16000)) << 112
+            let mant = (UInt128(next64() & ((UInt64(1) << 48) - 1)) << 64) | UInt128(next64())
+            return sign | exp | mant
+        }
+        let count = 20_000
+        var aLimbs = [UInt32](), bLimbs = [UInt32]()
+        var aVals = [UInt128](), bVals = [UInt128]()
+        for _ in 0..<count {
+            let a = randomNormal128(), b = randomNormal128()
+            aVals.append(a); bVals.append(b)
+            aLimbs += limbs(of: a); bLimbs += limbs(of: b)
+        }
+        guard let (gAdd, gMul) = try gpuLimbFloatOps(tag: "4", limbs: 4, a: aLimbs, b: bLimbs) else {
+            throw XCTSkip("No Metal device available")
+        }
+        var addBad = 0, mulBad = 0
+        for i in 0..<count {
+            let fa = Float128(rawBits: aVals[i]), fb = Float128(rawBits: bVals[i])
+            if uint128(fromLimbs: gAdd[i*4..<i*4+4]) != (fa + fb).bits { addBad += 1 }
+            if uint128(fromLimbs: gMul[i*4..<i*4+4]) != (fa * fb).bits { mulBad += 1 }
+        }
+        XCTAssertEqual(addBad, 0, "limbfloat<4> add must match Float128")
+        XCTAssertEqual(mulBad, 0, "limbfloat<4> mul must match Float128")
+    }
+
+    /// Same generic code at K=2 (binary64 params) must reproduce CPU SoftDouble.
+    func testGPULimbFloat2MatchesSoftDouble() throws {
+        guard MetalContext.shared != nil else { throw XCTSkip("No Metal device available") }
+        var state: UInt64 = 0x13579BDF02468ACE
+        func nextDouble() -> Double {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            let m = Double(state >> 12) / Double(1 << 52)
+            let e = Int((state >> 3) & 0x3F) - 32
+            return ((state & 1) == 0 ? 1.0 : -1.0) * (1.0 + m) * pow(2.0, Double(e))
+        }
+        let count = 20_000
+        var aLimbs = [UInt32](), bLimbs = [UInt32]()
+        var aVals = [UInt64](), bVals = [UInt64]()
+        for _ in 0..<count {
+            let a = nextDouble().bitPattern, b = nextDouble().bitPattern
+            aVals.append(a); bVals.append(b)
+            aLimbs += limbs(of: a); bLimbs += limbs(of: b)
+        }
+        guard let (gAdd, gMul) = try gpuLimbFloatOps(tag: "2", limbs: 2, a: aLimbs, b: bLimbs) else {
+            throw XCTSkip("No Metal device available")
+        }
+        var addBad = 0, mulBad = 0
+        for i in 0..<count {
+            let sa = SoftDouble(rawBits: aVals[i]), sb = SoftDouble(rawBits: bVals[i])
+            if uint64(fromLimbs: gAdd[i*2..<i*2+2]) != (sa + sb).bits { addBad += 1 }
+            if uint64(fromLimbs: gMul[i*2..<i*2+2]) != (sa * sb).bits { mulBad += 1 }
+        }
+        XCTAssertEqual(addBad, 0, "limbfloat<2> add must match SoftDouble")
+        XCTAssertEqual(mulBad, 0, "limbfloat<2> mul must match SoftDouble")
+    }
+
     func testViewportRoundTrip() {
         let v = Viewport(centerX: -0.5, centerY: 0.0, pixelSize: 0.01)
         let (wx, wy) = v.coordinate(atPixelX: 100, pixelY: 50, width: 200, height: 100)
