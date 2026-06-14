@@ -48,7 +48,7 @@ struct SoftDoubleParts {
 
 /// Decompose packed binary64 bits into computational parts. Subnormal inputs
 /// are flushed to zero (NO_NAN_INF mode).
-@inlinable
+@inline(__always) @inlinable
 func partsFromBits64(_ bits: UInt64) -> SoftDoubleParts {
     let signBit = (bits >> 63) & 1 != 0
     let expBits = UInt32(truncatingIfNeeded: (bits >> 52) & 0x7FF)
@@ -69,7 +69,7 @@ func partsFromBits64(_ bits: UInt64) -> SoftDoubleParts {
 /// Round-to-nearest-even and pack a `SoftDoubleParts` (mantissa left-justified
 /// with bit 63 set) into binary64 bits. Handles the carry produced by a
 /// round-up cascading through the implied bit.
-@inlinable
+@inline(__always) @inlinable
 func bitsFromParts64(_ p: SoftDoubleParts, sticky stickyIn: Bool = false) -> UInt64 {
     if p.isZero {
         return p.sign ? kF64SignMask : 0
@@ -123,7 +123,7 @@ func bitsFromParts64(_ p: SoftDoubleParts, sticky stickyIn: Bool = false) -> UIn
 // MARK: - Helpers
 
 /// Right-shift, OR-ing any bits shifted out into a sticky flag.
-@inlinable
+@inline(__always) @inlinable
 func shiftRightTrackSticky64(_ n: UInt64, by shift: Int) -> (value: UInt64, sticky: Bool) {
     if shift == 0 { return (n, false) }
     if shift >= 64 { return (0, n != 0) }
@@ -138,7 +138,7 @@ func shiftRightTrackSticky64(_ n: UInt64, by shift: Int) -> (value: UInt64, stic
 /// Algebraic add of two parts (their signs determine add-vs-subtract).
 /// Returns unpacked result with mantissa left-justified (leading 1 at bit 63),
 /// plus a sticky flag carrying bits lost during alignment.
-@inlinable
+@inline(__always) @inlinable
 func addParts64(_ a: SoftDoubleParts, _ b: SoftDoubleParts) -> (SoftDoubleParts, sticky: Bool) {
     if a.isZero { return (b, false) }
     if b.isZero { return (a, false) }
@@ -191,7 +191,7 @@ func addParts64(_ a: SoftDoubleParts, _ b: SoftDoubleParts) -> (SoftDoubleParts,
 /// 64x64 multiply. Both inputs have leading 1 at bit 63. The 128-bit product
 /// has its leading 1 at bit 126 or 127; we normalize so the result mantissa
 /// has its leading 1 at bit 63.
-@inlinable
+@inline(__always) @inlinable
 func multiplyParts64(_ a: SoftDoubleParts, _ b: SoftDoubleParts) -> (SoftDoubleParts, sticky: Bool) {
     let resultSign = a.sign != b.sign
     if a.isZero || b.isZero {
@@ -223,7 +223,7 @@ func multiplyParts64(_ a: SoftDoubleParts, _ b: SoftDoubleParts) -> (SoftDoubleP
 /// Reinterpret a hardware `Double` as software binary64 bits. The packed layout
 /// is identical, so this is the bit pattern verbatim for normal values; zero and
 /// subnormals flush to zero, NaN/Inf saturate near max (NO_NAN_INF mode).
-@inlinable
+@inline(__always) @inlinable
 func softDoubleFromDouble(_ d: Double) -> UInt64 {
     let bits = d.bitPattern
     let expBits = UInt32(truncatingIfNeeded: (bits >> 52) & 0x7FF)
@@ -242,7 +242,7 @@ func softDoubleFromDouble(_ d: Double) -> UInt64 {
 
 /// Reinterpret software binary64 bits as a hardware `Double`. Identity for
 /// normal values; subnormals already flushed to zero upstream.
-@inlinable
+@inline(__always) @inlinable
 func softDoubleToDouble(_ bits: UInt64) -> Double {
     Double(bitPattern: bits)
 }

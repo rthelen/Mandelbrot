@@ -39,7 +39,7 @@ struct Float128Parts {
 
 /// Decompose packed binary128 bits into computational parts. Subnormal inputs
 /// are flushed to zero (NO_NAN_INF mode).
-@inlinable
+@inline(__always) @inlinable
 func partsFromBits(_ bits: UInt128) -> Float128Parts {
     let signBit = (bits >> 127) & 1 != 0
     let expBits = UInt32(truncatingIfNeeded: (bits >> 112) & 0x7FFF)
@@ -60,7 +60,7 @@ func partsFromBits(_ bits: UInt128) -> Float128Parts {
 /// Round-to-nearest-even and pack a `Float128Parts` (mantissa left-justified
 /// with bit 127 set) into binary128 bits. Handles the carry produced by a
 /// round-up cascading through the implied bit.
-@inlinable
+@inline(__always) @inlinable
 func bitsFromParts(_ p: Float128Parts, sticky stickyIn: Bool = false) -> UInt128 {
     if p.isZero {
         return p.sign ? kF128SignMask : 0
@@ -114,7 +114,7 @@ func bitsFromParts(_ p: Float128Parts, sticky stickyIn: Bool = false) -> UInt128
 // MARK: - Helpers
 
 /// Right-shift, OR-ing any bits shifted out into a sticky flag.
-@inlinable
+@inline(__always) @inlinable
 func shiftRightTrackSticky(_ n: UInt128, by shift: Int) -> (value: UInt128, sticky: Bool) {
     if shift == 0 { return (n, false) }
     if shift >= 128 { return (0, n != 0) }
@@ -129,7 +129,7 @@ func shiftRightTrackSticky(_ n: UInt128, by shift: Int) -> (value: UInt128, stic
 /// Algebraic add of two parts (their signs determine add-vs-subtract).
 /// Returns unpacked result with mantissa left-justified (leading 1 at bit 127),
 /// plus a sticky flag carrying bits lost during alignment.
-@inlinable
+@inline(__always) @inlinable
 func addParts(_ a: Float128Parts, _ b: Float128Parts) -> (Float128Parts, sticky: Bool) {
     if a.isZero { return (b, false) }
     if b.isZero { return (a, false) }
@@ -182,7 +182,7 @@ func addParts(_ a: Float128Parts, _ b: Float128Parts) -> (Float128Parts, sticky:
 /// 128x128 multiply. Both inputs have leading 1 at bit 127. The 256-bit
 /// product has its leading 1 at bit 254 or 255; we normalize so the result
 /// mantissa has its leading 1 at bit 127.
-@inlinable
+@inline(__always) @inlinable
 func multiplyParts(_ a: Float128Parts, _ b: Float128Parts) -> (Float128Parts, sticky: Bool) {
     let resultSign = a.sign != b.sign
     if a.isZero || b.isZero {
@@ -213,7 +213,7 @@ func multiplyParts(_ a: Float128Parts, _ b: Float128Parts) -> (Float128Parts, st
 
 /// Convert IEEE 754 binary64 to binary128 bits. Zero and subnormals → zero;
 /// NaN/Inf → saturated near max (we don't carry these through Mandelbrot).
-@inlinable
+@inline(__always) @inlinable
 func float128FromDouble(_ d: Double) -> UInt128 {
     let bits = d.bitPattern
     let signBit = (bits >> 63) & 1
@@ -240,7 +240,7 @@ func float128FromDouble(_ d: Double) -> UInt128 {
 
 /// Convert binary128 bits to a binary64 Double. Truncates the low 60 mantissa
 /// bits. Under/overflow at the binary64 boundary clamps to ±0 / ±Infinity.
-@inlinable
+@inline(__always) @inlinable
 func float128ToDouble(_ bits: UInt128) -> Double {
     let signBit = (bits >> 127) & 1 != 0
     let expBits = UInt32(truncatingIfNeeded: (bits >> 112) & 0x7FFF)
