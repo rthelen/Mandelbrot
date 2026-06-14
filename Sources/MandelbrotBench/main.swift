@@ -88,6 +88,7 @@ func runCell(target: PlaybackTarget, kernel: KernelName, iters: UInt32,
     let engine: any MandelbrotEngine
     switch kernel {
     case .double:          engine = CPUEngine(kernel: DoubleStripKernel())
+    case .doubleSIMD:      engine = CPUEngine(kernel: SIMDDoubleStripKernel())
     case .softDouble:      engine = CPUEngine(kernel: SoftDoubleStripKernel())
     case .softDoubleMetal: engine = MetalSoftDouble64Engine()
     case .float128:        engine = CPUEngine(kernel: Float128StripKernel())

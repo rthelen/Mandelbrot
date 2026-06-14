@@ -559,6 +559,27 @@ final class MandelbrotCoreTests: XCTestCase {
         }
     }
 
+    /// The SIMD Double kernel must be bit-identical to the scalar Double kernel
+    /// (same arithmetic op-for-op, just data-parallel) — iterations AND smooth.
+    func testSIMDDoubleMatchesScalar() {
+        let scalar = CPUEngine(kernel: DoubleStripKernel())
+        let simd = CPUEngine(kernel: SIMDDoubleStripKernel())
+        let viewports = [
+            Viewport.defaultView(width: 200, height: 150),
+            Viewport(centerX: -0.7471847332221527, centerY: 0.06750650337518614,
+                     pixelSize: 0.001754405924876314),
+        ]
+        for vp in viewports {
+            let a = scalar.render(viewport: vp, width: 200, height: 150, maxIterations: 1024)
+            let b = simd.render(viewport: vp, width: 200, height: 150, maxIterations: 1024)
+            var bad = 0
+            a.withBufferPointer { ab in b.withBufferPointer { bb in
+                for i in 0..<(200*150) where ab[i] != bb[i] { bad += 1 }
+            }}
+            XCTAssertEqual(bad, 0, "SIMD Double kernel must match scalar exactly")
+        }
+    }
+
     func testViewportRoundTrip() {
         let v = Viewport(centerX: -0.5, centerY: 0.0, pixelSize: 0.01)
         let (wx, wy) = v.coordinate(atPixelX: 100, pixelY: 50, width: 200, height: 100)

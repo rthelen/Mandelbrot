@@ -13,6 +13,7 @@ enum ComparisonMode: Sendable {
 
 enum KernelChoice: String, CaseIterable, Identifiable, Sendable {
     case doubleCPU = "Double (CPU)"
+    case doubleSIMDCPU = "Double SIMD (CPU)"
     case softDoubleCPU = "SoftDouble (CPU)"
     case softDoubleMetal = "SoftDouble (Metal GPU)"
     case doubleDiffCPU = "Double: HW vs SW (pixel-diff)"
@@ -40,6 +41,7 @@ enum KernelChoice: String, CaseIterable, Identifiable, Sendable {
     var engine: any MandelbrotEngine {
         switch self {
         case .doubleCPU: return CPUEngine(kernel: DoubleStripKernel())
+        case .doubleSIMDCPU: return CPUEngine(kernel: SIMDDoubleStripKernel())
         case .softDoubleCPU: return CPUEngine(kernel: SoftDoubleStripKernel())
         case .softDoubleMetal: return MetalSoftDouble64Engine()
         // Comparison modes render via the comparison engines, not this path; the
@@ -62,6 +64,7 @@ enum KernelChoice: String, CaseIterable, Identifiable, Sendable {
     var precisionFloor: Double {
         switch self {
         case .doubleCPU:       return 1e-13
+        case .doubleSIMDCPU:   return 1e-13
         case .softDoubleCPU:   return 1e-13   // same format as Double
         case .softDoubleMetal: return 1e-13   // same format as Double
         case .doubleDiffCPU:   return 1e-13   // both operands are binary64
