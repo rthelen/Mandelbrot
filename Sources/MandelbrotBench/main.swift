@@ -85,9 +85,10 @@ func runCell(target: PlaybackTarget, kernel: KernelName, iters: UInt32,
              opts: Options, runDir: URL) {
     let engine: any MandelbrotEngine
     switch kernel {
-    case .double:     engine = CPUEngine(kernel: DoubleStripKernel())
-    case .softDouble: engine = CPUEngine(kernel: SoftDoubleStripKernel())
-    case .float128:   engine = CPUEngine(kernel: Float128StripKernel())
+    case .double:          engine = CPUEngine(kernel: DoubleStripKernel())
+    case .softDouble:      engine = CPUEngine(kernel: SoftDoubleStripKernel())
+    case .softDoubleMetal: engine = MetalSoftDouble64Engine()
+    case .float128:        engine = CPUEngine(kernel: Float128StripKernel())
     }
 
     let label = "\(slug(target.name))-\(kernel.rawValue)-\(iters)"

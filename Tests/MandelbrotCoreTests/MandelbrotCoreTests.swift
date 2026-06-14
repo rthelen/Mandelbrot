@@ -329,6 +329,43 @@ final class MandelbrotCoreTests: XCTestCase {
         XCTAssertEqual(mulBad, 0, "GPU mul must match CPU SoftDouble bit-for-bit. \(sample)")
     }
 
+    /// The GPU software-64 Mandelbrot kernel must match the CPU software-64
+    /// kernel on every pixel's iteration count (the precision-sensitive result).
+    /// Since CPU SoftDouble == hardware Double, this also matches the hardware
+    /// Double render. Checked shallow and deep.
+    func testGPUMandelbrotMatchesCPU() throws {
+        guard MetalContext.shared != nil else { throw XCTSkip("No Metal device available") }
+        let gpu = MetalSoftDouble64Engine()
+        let cpu = CPUEngine(kernel: SoftDoubleStripKernel())
+        let hw = CPUEngine(kernel: DoubleStripKernel())
+
+        let cases: [(Viewport, Int, Int, UInt32)] = [
+            (Viewport.defaultView(width: 320, height: 240), 320, 240, 512),
+            (Viewport(centerX: -0.7471847332221527, centerY: 0.06750650337518614,
+                      pixelSize: 0.001754405924876314), 320, 240, 1024),  // seahorse frame 30
+        ]
+
+        for (vp, w, h, iters) in cases {
+            let gField = gpu.render(viewport: vp, width: w, height: h, maxIterations: iters)
+            let cField = cpu.render(viewport: vp, width: w, height: h, maxIterations: iters)
+            let hField = hw.render(viewport: vp, width: w, height: h, maxIterations: iters)
+
+            var gpuVsSoft = 0, gpuVsHW = 0
+            gField.withBufferPointer { g in
+                cField.withBufferPointer { c in
+                    hField.withBufferPointer { hh in
+                        for i in 0..<(w * h) {
+                            if g[i].iterations != c[i].iterations { gpuVsSoft += 1 }
+                            if g[i].iterations != hh[i].iterations { gpuVsHW += 1 }
+                        }
+                    }
+                }
+            }
+            XCTAssertEqual(gpuVsSoft, 0, "GPU soft-64 must match CPU soft-64 iterations")
+            XCTAssertEqual(gpuVsHW, 0, "GPU soft-64 must match hardware Double iterations")
+        }
+    }
+
     func testViewportRoundTrip() {
         let v = Viewport(centerX: -0.5, centerY: 0.0, pixelSize: 0.01)
         let (wx, wy) = v.coordinate(atPixelX: 100, pixelY: 50, width: 200, height: 100)

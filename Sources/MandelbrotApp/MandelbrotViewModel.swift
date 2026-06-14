@@ -14,6 +14,7 @@ enum ComparisonMode: Sendable {
 enum KernelChoice: String, CaseIterable, Identifiable, Sendable {
     case doubleCPU = "Double (CPU)"
     case softDoubleCPU = "SoftDouble (CPU)"
+    case softDoubleMetal = "SoftDouble (Metal GPU)"
     case doubleDiffCPU = "Double: HW vs SW (pixel-diff)"
     case doubleLockstepCPU = "Double: HW vs SW (per-step)"
     case selfTestCPU = "⚠ Self-test (inject fault)"
@@ -38,6 +39,7 @@ enum KernelChoice: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .doubleCPU: return CPUEngine(kernel: DoubleStripKernel())
         case .softDoubleCPU: return CPUEngine(kernel: SoftDoubleStripKernel())
+        case .softDoubleMetal: return MetalSoftDouble64Engine()
         // Comparison modes render via the comparison engines, not this path; the
         // hardware kernel is a harmless default so the switch stays total.
         case .doubleDiffCPU, .doubleLockstepCPU, .selfTestCPU: return CPUEngine(kernel: DoubleStripKernel())
@@ -55,6 +57,7 @@ enum KernelChoice: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .doubleCPU:       return 1e-13
         case .softDoubleCPU:   return 1e-13   // same format as Double
+        case .softDoubleMetal: return 1e-13   // same format as Double
         case .doubleDiffCPU:   return 1e-13   // both operands are binary64
         case .doubleLockstepCPU: return 1e-13 // both operands are binary64
         case .selfTestCPU:     return 1e-13

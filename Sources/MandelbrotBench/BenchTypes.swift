@@ -25,6 +25,7 @@ struct BuildInfo: Codable {
 enum KernelName: String, Codable, CaseIterable {
     case double = "double"
     case softDouble = "softdouble"
+    case softDoubleMetal = "softdouble-metal"
     case float128 = "float128"
 }
 

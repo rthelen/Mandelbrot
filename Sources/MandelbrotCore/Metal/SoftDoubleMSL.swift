@@ -157,6 +157,71 @@ static ulong sd_mul(ulong x, ulong y) {
     return sd_pack(r, s);
 }
 
+// Exact binary64 of a small unsigned integer (used for the per-pixel column
+// offset; values are < image width, far below 2^53 so the result is exact).
+static ulong sd_from_uint(uint v) {
+    if (v == 0) return 0;
+    int e = 31 - (int)clz(v);                 // index of MSB, 0..31
+    ulong mant = (((ulong)v) << (52 - e)) & SD_MANT_MASK;
+    return ((ulong)((uint)(e + SD_BIAS)) << 52) | mant;   // positive
+}
+
+// Approximate float of a non-negative software-binary64 value, for the
+// display-only smoothing term (kept in float, like the CPU's smoothFraction).
+static float sd_to_float(ulong bits) {
+    uint expb = (uint)((bits >> 52) & 0x7FF);
+    if (expb == 0) return 0.0f;
+    ulong mant = bits & SD_MANT_MASK;
+    float m = 1.0f + (float)(mant >> 29) * (1.0f / 8388608.0f);  // top 23 mantissa bits / 2^23
+    return m * exp2((float)((int)expb - SD_BIAS));
+}
+
+constant ulong SD_FOUR = 0x4010000000000000;  // 4.0
+constant ulong SD_TWO  = 0x4000000000000000;  // 2.0
+constant float SD_LOG2 = 0.69314718055994531f;
+
+// Mandelbrot iteration in software binary64. Per-pixel c is reconstructed from
+// per-strip x-origins and per-row y-origins (precomputed on the CPU in full
+// precision), so it reproduces the CPU SoftDoubleStripKernel bit-for-bit.
+kernel void mandelbrot_sd64(device const ulong *stripOriginX [[buffer(0)]],
+                            device const ulong *rowOriginY    [[buffer(1)]],
+                            constant ulong     &dxBits        [[buffer(2)]],
+                            constant uint2     &dims          [[buffer(3)]],
+                            constant uint      &maxIter       [[buffer(4)]],
+                            device uint        *outIter       [[buffer(5)]],
+                            device float       *outSmooth     [[buffer(6)]],
+                            uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= dims.x || gid.y >= dims.y) return;
+    uint strip = gid.x >> 5;     // / 32
+    uint col   = gid.x & 31;     // % 32
+    ulong cx = sd_add(stripOriginX[strip], sd_mul(dxBits, sd_from_uint(col)));
+    ulong cy = rowOriginY[gid.y];
+
+    ulong zx = 0, zy = 0, magSq = 0;
+    uint n = 0;
+    while (n < maxIter) {
+        ulong zx2 = sd_mul(zx, zx);
+        ulong zy2 = sd_mul(zy, zy);
+        magSq = sd_add(zx2, zy2);
+        if (magSq > SD_FOUR) break;     // both non-negative: bit order == value order
+        ulong nzx = sd_add(sd_sub(zx2, zy2), cx);
+        ulong nzy = sd_add(sd_mul(SD_TWO, sd_mul(zx, zy)), cy);
+        zx = nzx; zy = nzy;
+        n += 1;
+    }
+
+    uint idx = gid.y * dims.x + gid.x;
+    if (n < maxIter) {
+        outIter[idx] = n;
+        float mag = sd_to_float(magSq);
+        float logZn = 0.5f * log(mag);
+        outSmooth[idx] = 1.0f - log(logZn / SD_LOG2) / SD_LOG2;
+    } else {
+        outIter[idx] = 0xFFFFFFFF;      // in-set sentinel (matches PixelResult.inSet)
+        outSmooth[idx] = 0.0f;
+    }
+}
+
 // Arithmetic self-test: compute a+b and a*b in software binary64 on the GPU.
 kernel void sd_op_test(device const ulong *a     [[buffer(0)]],
                        device const ulong *b     [[buffer(1)]],
