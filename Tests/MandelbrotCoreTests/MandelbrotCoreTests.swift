@@ -7,6 +7,8 @@ private extension Double {
     var softBits: UInt64 { SoftDouble(self).bits }
 }
 
+private func hex(_ x: UInt64) -> String { String(format: "0x%016llx", x) }
+
 final class MandelbrotCoreTests: XCTestCase {
     func testFloat128BasicArithmetic() {
         let a: Float128 = 2.5
@@ -275,6 +277,56 @@ final class MandelbrotCoreTests: XCTestCase {
             width: 200, height: 200, maxIterations: 256)
         XCTAssertGreaterThan(comp.mismatchCount, 0, "injected fault must be detected")
         XCTAssertEqual(comp.firstDivergence?.label, "zx'")
+    }
+
+    /// The MSL software-binary64 port must reproduce the CPU `SoftDouble`
+    /// bit-for-bit on the GPU (and hence hardware Double, since CPU SoftDouble
+    /// is proven equal to it). Pure integer arithmetic → exact agreement.
+    func testGPUSoftDouble64MatchesCPU() throws {
+        // Same deterministic LCG as the CPU brute-force test.
+        var state: UInt64 = 0x9E3779B97F4A7C15
+        func nextDouble() -> Double {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            let m = Double(state >> 12) / Double(1 << 52)
+            let e = Int((state >> 3) & 0x3F) - 32
+            let sign = (state & 1) == 0 ? 1.0 : -1.0
+            return sign * (1.0 + m) * pow(2.0, Double(e))
+        }
+
+        let count = 100_000
+        var aBits = [UInt64](repeating: 0, count: count)
+        var bBits = [UInt64](repeating: 0, count: count)
+        for i in 0..<count {
+            aBits[i] = nextDouble().bitPattern
+            bBits[i] = nextDouble().bitPattern
+        }
+
+        guard let (gpuAdd, gpuMul) = try gpuSoftDouble64Ops(a: aBits, b: bBits) else {
+            throw XCTSkip("No Metal device available")
+        }
+
+        var addBad = 0, mulBad = 0
+        var sample = ""
+        for i in 0..<count {
+            let sa = SoftDouble(rawBits: aBits[i])
+            let sb = SoftDouble(rawBits: bBits[i])
+            let cpuAdd = (sa + sb).bits
+            let cpuMul = (sa * sb).bits
+            if gpuAdd[i] != cpuAdd {
+                addBad += 1
+                if sample.isEmpty {
+                    sample = "add[\(i)]: a=\(hex(aBits[i])) b=\(hex(bBits[i])) gpu=\(hex(gpuAdd[i])) cpu=\(hex(cpuAdd))"
+                }
+            }
+            if gpuMul[i] != cpuMul {
+                mulBad += 1
+                if sample.isEmpty {
+                    sample = "mul[\(i)]: a=\(hex(aBits[i])) b=\(hex(bBits[i])) gpu=\(hex(gpuMul[i])) cpu=\(hex(cpuMul))"
+                }
+            }
+        }
+        XCTAssertEqual(addBad, 0, "GPU add must match CPU SoftDouble bit-for-bit. \(sample)")
+        XCTAssertEqual(mulBad, 0, "GPU mul must match CPU SoftDouble bit-for-bit. \(sample)")
     }
 
     func testViewportRoundTrip() {

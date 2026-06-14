@@ -15,7 +15,8 @@ let package = Package(
     targets: [
         .target(
             name: "MandelbrotCore",
-            path: "Sources/MandelbrotCore"
+            path: "Sources/MandelbrotCore",
+            linkerSettings: [.linkedFramework("Metal")]
         ),
         .executableTarget(
             name: "MandelbrotApp",
