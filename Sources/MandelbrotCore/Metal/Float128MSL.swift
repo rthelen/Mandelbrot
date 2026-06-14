@@ -91,6 +91,27 @@ static u256 u128_mul_full(u128 a, u128 b) {
     return r;
 }
 
+// 128-bit square -> 256, exploiting symmetry: a^2 = a1^2*2^128 + 2*a1*a0*2^64 +
+// a0^2 — three 64x64 limb products instead of four. Same integer product as
+// u128_mul_full(a, a), so bit-identical, just cheaper.
+static u256 u128_sqr_full(u128 a) {
+    ulong h, l;
+    sd_mul64(a.lo, a.lo, h, l); ulong l00 = l, h00 = h;   // a0^2
+    sd_mul64(a.hi, a.hi, h, l); ulong l11 = l, h11 = h;   // a1^2
+    sd_mul64(a.hi, a.lo, h, l); ulong lm = l, hm = h;     // a1*a0
+
+    ulong w0 = l00, w1 = h00, w2 = l11, w3 = h11;
+    // add (hm:lm) at word offset 1, twice (= 2*a1*a0)
+    for (int i = 0; i < 2; ++i) {
+        ulong t, c1, c2;
+        t = w1 + lm; c1 = (t < w1) ? 1 : 0; w1 = t;
+        t = w2 + hm; c2 = (t < w2) ? 1 : 0; w2 = t;
+        t = w2 + c1; c2 += (t < w2) ? 1 : 0; w2 = t;
+        w3 += c2;
+    }
+    u256 r; r.lo = u128_make(w1, w0); r.hi = u128_make(w3, w2); return r;
+}
+
 // ---- binary128 constants & format ----
 constant int  F128_BIAS    = 16383;
 constant uint F128_EXP_MAX = 32767;
@@ -198,6 +219,32 @@ static Parts128 f128_mul_parts(Parts128 a, Parts128 b, thread bool &stickyOut) {
     Parts128 r; r.sign = sign; r.exp = e; r.mant = resMant; stickyOut = sticky; return r;
 }
 
+// Squaring: like f128_mul but with the symmetric limb product, and the result
+// sign is always positive. Bit-identical to f128_mul(x, x).
+static Parts128 f128_sqr_parts(Parts128 a, thread bool &stickyOut) {
+    if (u128_is_zero(a.mant)) {
+        stickyOut = false;
+        Parts128 z; z.sign = false; z.exp = 0; z.mant = u128_make(0, 0); return z;
+    }
+    u256 prod = u128_sqr_full(a.mant);
+    u128 resMant = prod.hi;
+    int e = a.exp + a.exp;
+    bool sticky;
+    if (((resMant.hi >> 63) & 1) != 0) {
+        e += 1;
+        sticky = !u128_is_zero(prod.lo);
+    } else {
+        ulong loMsb = (prod.lo.hi >> 63) & 1;
+        resMant = u128_or(u128_shl(resMant, 1), u128_make(0, loMsb));
+        u128 loCleared = u128_make(prod.lo.hi & ~(((ulong)1) << 63), prod.lo.lo);
+        sticky = !u128_is_zero(loCleared);
+    }
+    Parts128 r; r.sign = false; r.exp = e; r.mant = resMant; stickyOut = sticky; return r;
+}
+static u128 f128_sqr(u128 x) {
+    bool s; Parts128 r = f128_sqr_parts(f128_unpack(x), s); return f128_pack(r, s);
+}
+
 static u128 f128_add(u128 x, u128 y) {
     bool s; Parts128 r = f128_add_parts(f128_unpack(x), f128_unpack(y), s); return f128_pack(r, s);
 }
@@ -247,8 +294,8 @@ kernel void mandelbrot_f128(device const ulong *cxArr   [[buffer(0)]],
     u128 zx = u128_make(0, 0), zy = u128_make(0, 0), magSq = u128_make(0, 0);
     uint n = 0;
     while (n < maxIter) {
-        u128 zx2 = f128_mul(zx, zx);
-        u128 zy2 = f128_mul(zy, zy);
+        u128 zx2 = f128_sqr(zx);   // dedicated square: 3 limb products, not 4
+        u128 zy2 = f128_sqr(zy);
         magSq = f128_add(zx2, zy2);
         if (u128_gt(magSq, four)) break;
         u128 nzx = f128_add(f128_sub(zx2, zy2), cx);

@@ -118,6 +118,41 @@ static void sd_mul64(ulong A, ulong B, thread ulong &hi, thread ulong &lo) {
     hi = retHi; lo = retLo;
 }
 
+// 64-bit square -> 128 via symmetry: a^2 = a1^2*2^64 + 2*a1*a0*2^32 + a0^2 —
+// three 32x32 products instead of four. Bit-identical to sd_mul64(a, a).
+static void sd_sqr64(ulong a, thread ulong &hi, thread ulong &lo) {
+    ulong a0 = a & 0xFFFFFFFF, a1 = a >> 32;
+    ulong s00 = a0 * a0;
+    ulong s11 = a1 * a1;
+    ulong mid = a1 * a0;
+    ulong L = s00, H = s11;
+    ulong addlo = mid << 32, addhi = mid >> 32;
+    // + 2 * (mid << 32)
+    ulong t = L + addlo; ulong c = (t < L) ? 1 : 0; L = t; H += addhi + c;
+    t = L + addlo; c = (t < L) ? 1 : 0; L = t; H += addhi + c;
+    hi = H; lo = L;
+}
+
+static Parts sd_sqr_parts(Parts a, thread bool &stickyOut) {
+    if (a.mant == 0) { stickyOut = false; Parts z; z.sign = false; z.exp = 0; z.mant = 0; return z; }
+    ulong hi, lo;
+    sd_sqr64(a.mant, hi, lo);
+    ulong resMant = hi;
+    int e = a.exp + a.exp;
+    bool sticky;
+    if (((hi >> 63) & 1) != 0) {
+        e += 1; sticky = (lo != 0);
+    } else {
+        ulong loMsb = (lo >> 63) & 1;
+        resMant = (hi << 1) | loMsb;
+        sticky = (lo & ((((ulong)1) << 63) - 1)) != 0;
+    }
+    Parts r; r.sign = false; r.exp = e; r.mant = resMant; stickyOut = sticky; return r;
+}
+static ulong sd_sqr(ulong x) {
+    bool s; Parts r = sd_sqr_parts(sd_unpack(x), s); return sd_pack(r, s);
+}
+
 static Parts sd_mul_parts(Parts a, Parts b, thread bool &stickyOut) {
     bool sign = (a.sign != b.sign);
     if (a.mant == 0 || b.mant == 0) {
@@ -206,8 +241,8 @@ kernel void mandelbrot_sd64(device const ulong *stripOriginX [[buffer(0)]],
     ulong zx = 0, zy = 0, magSq = 0;
     uint n = 0;
     while (n < maxIter) {
-        ulong zx2 = sd_mul(zx, zx);
-        ulong zy2 = sd_mul(zy, zy);
+        ulong zx2 = sd_sqr(zx);   // dedicated square: 3 limb products, not 4
+        ulong zy2 = sd_sqr(zy);
         magSq = sd_add(zx2, zy2);
         if (magSq > SD_FOUR) break;     // both non-negative: bit order == value order
         ulong nzx = sd_add(sd_sub(zx2, zy2), cx);
