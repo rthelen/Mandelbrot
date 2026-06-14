@@ -209,6 +209,15 @@ static u128 f128_mul(u128 x, u128 y) {
     bool s; Parts128 r = f128_mul_parts(f128_unpack(x), f128_unpack(y), s); return f128_pack(r, s);
 }
 
+// Exact multiply by 2.0: increment the biased exponent. Valid for normal
+// inputs that don't overflow (Mandelbrot values are bounded by the bailout), and
+// bit-identical to f128_mul(x, 2.0) since scaling by a power of two never rounds.
+// Zero stays zero.
+static u128 f128_double(u128 x) {
+    if (((x.hi >> 48) & 0x7FFF) == 0) return x;     // zero (subnormals flushed)
+    return u128_make(x.hi + (((ulong)1) << 48), x.lo);
+}
+
 // Approximate float of a non-negative binary128 value, for display-only smooth.
 static float f128_to_float(u128 bits) {
     uint expb = (uint)((bits.hi >> 48) & 0x7FFF);
@@ -217,7 +226,6 @@ static float f128_to_float(u128 bits) {
     return m * exp2((float)((int)expb - F128_BIAS));
 }
 
-constant ulong F128_TWO_HI  = 0x4000000000000000;  // 2.0  -> exp 16384
 constant ulong F128_FOUR_HI = 0x4001000000000000;  // 4.0  -> exp 16385
 constant float F128_LOG2 = 0.69314718055994531f;
 
@@ -235,7 +243,6 @@ kernel void mandelbrot_f128(device const ulong *cxArr   [[buffer(0)]],
     u128 cx = u128_make(cxArr[2 * gid.x], cxArr[2 * gid.x + 1]);
     u128 cy = u128_make(cyArr[2 * gid.y], cyArr[2 * gid.y + 1]);
     u128 four = u128_make(F128_FOUR_HI, 0);
-    u128 two  = u128_make(F128_TWO_HI, 0);
 
     u128 zx = u128_make(0, 0), zy = u128_make(0, 0), magSq = u128_make(0, 0);
     uint n = 0;
@@ -245,7 +252,8 @@ kernel void mandelbrot_f128(device const ulong *cxArr   [[buffer(0)]],
         magSq = f128_add(zx2, zy2);
         if (u128_gt(magSq, four)) break;
         u128 nzx = f128_add(f128_sub(zx2, zy2), cx);
-        u128 nzy = f128_add(f128_mul(two, f128_mul(zx, zy)), cy);
+        // 2*zx*zy: one multiply then a free exponent bump (vs a second multiply).
+        u128 nzy = f128_add(f128_double(f128_mul(zx, zy)), cy);
         zx = nzx; zy = nzy;
         n += 1;
     }

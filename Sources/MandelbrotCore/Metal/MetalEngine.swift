@@ -83,9 +83,10 @@ public struct MetalSoftDouble64Engine: MandelbrotEngine {
         enc.setBuffer(iterBuf, offset: 0, index: 5)
         enc.setBuffer(smoothBuf, offset: 0, index: 6)
 
-        let tgw = 16, tgh = max(1, min(16, pipe.maxTotalThreadsPerThreadgroup / 16))
+        // Compact 8x8 threadgroups: better simdgroup coherence (less divergence)
+        // and occupancy than wide/large groups (see Float128 profiling).
         enc.dispatchThreads(MTLSize(width: width, height: height, depth: 1),
-                            threadsPerThreadgroup: MTLSize(width: tgw, height: tgh, depth: 1))
+                            threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
         enc.endEncoding()
         cmd.commit()
         cmd.waitUntilCompleted()

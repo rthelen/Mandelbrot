@@ -177,8 +177,14 @@ static float sd_to_float(ulong bits) {
 }
 
 constant ulong SD_FOUR = 0x4010000000000000;  // 4.0
-constant ulong SD_TWO  = 0x4000000000000000;  // 2.0
 constant float SD_LOG2 = 0.69314718055994531f;
+
+// Exact multiply by 2.0: increment the biased exponent (no rounding). Bounded
+// Mandelbrot values never overflow. Zero stays zero. Bit-identical to sd_mul(x, 2.0).
+static ulong sd_double(ulong x) {
+    if (((x >> 52) & 0x7FF) == 0) return x;   // zero (subnormals flushed)
+    return x + (((ulong)1) << 52);
+}
 
 // Mandelbrot iteration in software binary64. Per-pixel c is reconstructed from
 // per-strip x-origins and per-row y-origins (precomputed on the CPU in full
@@ -205,7 +211,7 @@ kernel void mandelbrot_sd64(device const ulong *stripOriginX [[buffer(0)]],
         magSq = sd_add(zx2, zy2);
         if (magSq > SD_FOUR) break;     // both non-negative: bit order == value order
         ulong nzx = sd_add(sd_sub(zx2, zy2), cx);
-        ulong nzy = sd_add(sd_mul(SD_TWO, sd_mul(zx, zy)), cy);
+        ulong nzy = sd_add(sd_double(sd_mul(zx, zy)), cy);   // 2*zx*zy via exponent bump
         zx = nzx; zy = nzy;
         n += 1;
     }

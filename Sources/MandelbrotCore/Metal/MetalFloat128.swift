@@ -68,6 +68,83 @@ public func gpuFloat128Ops(a: [UInt128], b: [UInt128]) throws -> (add: [UInt128]
     return (add: addR, mul: mulR)
 }
 
+/// Per-column `cx` and per-row `cy` as binary128 limb pairs (hi, lo), computed
+/// in Float128 exactly as `CPUEngine` + `Float128StripKernel` slice strips, so
+/// the GPU reproduces the CPU result bit-for-bit.
+func float128PixelOrigins(
+    viewport: Viewport, width: Int, height: Int, stripW: Int
+) -> (cx: [UInt64], cy: [UInt64]) {
+    let stripsPerRow = (width + stripW - 1) / stripW
+    let originX = viewport.originX(forWidth: width)
+    let originY = viewport.originY(forHeight: height)
+    let pxSize = viewport.pixelSize
+
+    var cxFlat = [UInt64](repeating: 0, count: 2 * width)
+    for s in 0..<stripsPerRow {
+        let sox = originX + pxSize * Float128(s * stripW)
+        let cols = min(stripW, width - s * stripW)
+        for c in 0..<cols {
+            let gx = s * stripW + c
+            let (hi, lo) = splitU128((sox + pxSize * Float128(c)).bits)
+            cxFlat[2*gx] = hi; cxFlat[2*gx+1] = lo
+        }
+    }
+    var cyFlat = [UInt64](repeating: 0, count: 2 * height)
+    for r in 0..<height {
+        let (hi, lo) = splitU128((originY - pxSize * Float128(r)).bits)
+        cyFlat[2*r] = hi; cyFlat[2*r+1] = lo
+    }
+    return (cxFlat, cyFlat)
+}
+
+/// Profiles the `mandelbrot_f128` kernel: reports the pipeline's occupancy
+/// limits and sweeps threadgroup shapes, timing each with GPU timestamps.
+public func profileFloat128(
+    viewport: Viewport, width: Int, height: Int, maxIterations: UInt32
+) -> String {
+    guard let ctx = MetalContext.shared, let pipe = try? ctx.pipeline("mandelbrot_f128") else {
+        return "No Metal device"
+    }
+    let dev = ctx.device
+    var (cxFlat, cyFlat) = float128PixelOrigins(viewport: viewport, width: width, height: height, stripW: 32)
+    var dims = SIMD2<UInt32>(UInt32(width), UInt32(height))
+    var maxIter = maxIterations
+    let pixelCount = width * height
+
+    let cxBuf = dev.makeBuffer(bytes: &cxFlat, length: cxFlat.count * 8, options: .storageModeShared)!
+    let cyBuf = dev.makeBuffer(bytes: &cyFlat, length: cyFlat.count * 8, options: .storageModeShared)!
+    let iterBuf = dev.makeBuffer(length: pixelCount * 4, options: .storageModeShared)!
+    let smoothBuf = dev.makeBuffer(length: pixelCount * 4, options: .storageModeShared)!
+
+    var out = "mandelbrot_f128: maxThreads/tg=\(pipe.maxTotalThreadsPerThreadgroup) "
+        + "execWidth=\(pipe.threadExecutionWidth)\n"
+        + "grid \(width)x\(height) @ \(maxIterations) iters (GPU time, best of 4):\n"
+
+    let configs: [(Int, Int)] = [(32,1),(64,1),(32,2),(16,2),(32,4),(16,4),(8,8),(16,8),(16,16),(32,8),(8,4)]
+    for (tgw, tgh) in configs where tgw * tgh <= pipe.maxTotalThreadsPerThreadgroup {
+        var best = Double.greatestFiniteMagnitude
+        for _ in 0..<4 {
+            let cmd = ctx.queue.makeCommandBuffer()!
+            let enc = cmd.makeComputeCommandEncoder()!
+            enc.setComputePipelineState(pipe)
+            enc.setBuffer(cxBuf, offset: 0, index: 0)
+            enc.setBuffer(cyBuf, offset: 0, index: 1)
+            enc.setBytes(&dims, length: MemoryLayout<SIMD2<UInt32>>.size, index: 2)
+            enc.setBytes(&maxIter, length: 4, index: 3)
+            enc.setBuffer(iterBuf, offset: 0, index: 4)
+            enc.setBuffer(smoothBuf, offset: 0, index: 5)
+            enc.dispatchThreads(MTLSize(width: width, height: height, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: tgw, height: tgh, depth: 1))
+            enc.endEncoding()
+            cmd.commit()
+            cmd.waitUntilCompleted()
+            best = min(best, (cmd.gpuEndTime - cmd.gpuStartTime) * 1000.0)
+        }
+        out += String(format: "  tg %2dx%-2d (%3d threads): %7.2f ms\n", tgw, tgh, tgw * tgh, best)
+    }
+    return out
+}
+
 /// GPU Mandelbrot engine in software binary128. Per-pixel `c` is precomputed on
 /// the CPU in full precision (matching `Float128StripKernel`'s strip slicing),
 /// uploaded as (hi, lo) limb pairs, and iterated on the GPU. Falls back to the
@@ -96,30 +173,8 @@ public struct MetalFloat128Engine: MandelbrotEngine {
         ctx: MetalContext, viewport: Viewport,
         width: Int, height: Int, maxIterations: UInt32
     ) throws -> IterationField {
-        let stripsPerRow = (width + Self.stripW - 1) / Self.stripW
-        let originX = viewport.originX(forWidth: width)
-        let originY = viewport.originY(forHeight: height)
-        let pxSize = viewport.pixelSize
-
-        // Per-column cx and per-row cy as binary128 bit patterns, computed in
-        // Float128 exactly as CPUEngine + Float128StripKernel do.
-        var cxFlat = [UInt64](repeating: 0, count: 2 * width)
-        for s in 0..<stripsPerRow {
-            let sox = originX + pxSize * Float128(s * Self.stripW)
-            let cols = min(Self.stripW, width - s * Self.stripW)
-            for c in 0..<cols {
-                let gx = s * Self.stripW + c
-                let cx = sox + pxSize * Float128(c)
-                let (hi, lo) = splitU128(cx.bits)
-                cxFlat[2*gx] = hi; cxFlat[2*gx+1] = lo
-            }
-        }
-        var cyFlat = [UInt64](repeating: 0, count: 2 * height)
-        for r in 0..<height {
-            let soy = originY - pxSize * Float128(r)
-            let (hi, lo) = splitU128(soy.bits)
-            cyFlat[2*r] = hi; cyFlat[2*r+1] = lo
-        }
+        var (cxFlat, cyFlat) = float128PixelOrigins(
+            viewport: viewport, width: width, height: height, stripW: Self.stripW)
 
         var dims = SIMD2<UInt32>(UInt32(width), UInt32(height))
         var maxIter = maxIterations
@@ -144,9 +199,11 @@ public struct MetalFloat128Engine: MandelbrotEngine {
         enc.setBuffer(iterBuf, offset: 0, index: 4)
         enc.setBuffer(smoothBuf, offset: 0, index: 5)
 
-        let tgw = 16, tgh = max(1, min(16, pipe.maxTotalThreadsPerThreadgroup / 16))
+        // 8x8 chosen by profiling: compact threadgroups keep a simdgroup
+        // spatially coherent (similar iteration counts → less divergence) and
+        // fit the register-bound occupancy better than wide/large groups.
         enc.dispatchThreads(MTLSize(width: width, height: height, depth: 1),
-                            threadsPerThreadgroup: MTLSize(width: tgw, height: tgh, depth: 1))
+                            threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
         enc.endEncoding()
         cmd.commit()
         cmd.waitUntilCompleted()

@@ -19,6 +19,7 @@ struct Options {
     var matrix: Bool = false
     var saveImages: Bool = false
     var imageEvery: Int = 1
+    var profile: Bool = false
 
     static func parse(_ args: [String]) -> Options {
         var opts = Options()
@@ -47,6 +48,7 @@ struct Options {
             case "--height": if let v = next(), let n = Int(v) { opts.height = n }
             case "--output": if let v = next() { opts.outputDir = v }
             case "--matrix": opts.matrix = true
+            case "--profile": opts.profile = true
             case "--save-images": opts.saveImages = true
             case "--image-every": if let v = next(), let n = Int(v) { opts.imageEvery = n }
             case "--help", "-h":
@@ -283,6 +285,22 @@ let itersList = opts.iters
 
 print("Machine: \(MachineInfo.current.soc) · \(MachineInfo.current.cores) cores · \(MachineInfo.current.memoryGB) GB")
 print("Build:   Swift \(BuildInfo.current.swiftVersion) · \(BuildInfo.current.config)")
+
+// --profile: sweep threadgroup configs for the Float128 Metal kernel at the
+// first --sample frame of the chosen --target, then exit.
+if opts.profile {
+    let target = (opts.target.flatMap(resolveTarget)) ?? .seahorseValley
+    let frame = opts.sample?.first ?? 30
+    var vp = Viewport.defaultView(width: opts.width, height: opts.height)
+    for _ in 0..<frame {
+        vp = vp.zoomed(by: Float128(target.zoomRate),
+                       aroundX: Float128(target.centerX), aroundY: Float128(target.centerY))
+    }
+    print("Profiling \(target.name) frame \(frame), px=\(vp.pixelSize.asDouble)\n")
+    print(profileFloat128(viewport: vp, width: opts.width, height: opts.height,
+                          maxIterations: opts.iters.first ?? 1024))
+    exit(0)
+}
 print("Matrix:  \(targets.count) targets × \(kernels.count) kernels × \(itersList.count) iter caps = \(targets.count * kernels.count * itersList.count) cells")
 print("")
 
