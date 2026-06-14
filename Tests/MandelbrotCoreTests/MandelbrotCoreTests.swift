@@ -366,6 +366,71 @@ final class MandelbrotCoreTests: XCTestCase {
         }
     }
 
+    /// GPU software-binary128 add/mul must match the CPU `Float128` bit-for-bit
+    /// over random full-width normal operands. Validates the MSL u128 port.
+    func testGPUFloat128MatchesCPU() throws {
+        guard MetalContext.shared != nil else { throw XCTSkip("No Metal device available") }
+
+        // Random *normal* binary128 bit patterns via LCG: random sign, exponent
+        // in a safe mid-range (no over/underflow), full 112-bit mantissa.
+        var state: UInt64 = 0xD1B54A32D192ED03
+        func next64() -> UInt64 {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return state
+        }
+        func randomNormal() -> UInt128 {
+            let sign = UInt128(next64() & 1) << 127
+            let exp = UInt128(8000 + (next64() % 16000)) << 112    // safe exponent range
+            let mantHi = UInt128(next64() & ((UInt64(1) << 48) - 1)) << 64
+            let mantLo = UInt128(next64())
+            return sign | exp | mantHi | mantLo
+        }
+
+        let count = 50_000
+        var aBits = [UInt128](repeating: 0, count: count)
+        var bBits = [UInt128](repeating: 0, count: count)
+        for i in 0..<count { aBits[i] = randomNormal(); bBits[i] = randomNormal() }
+
+        guard let (gpuAdd, gpuMul) = try gpuFloat128Ops(a: aBits, b: bBits) else {
+            throw XCTSkip("No Metal device available")
+        }
+
+        var addBad = 0, mulBad = 0
+        for i in 0..<count {
+            let fa = Float128(rawBits: aBits[i])
+            let fb = Float128(rawBits: bBits[i])
+            if gpuAdd[i] != (fa + fb).bits { addBad += 1 }
+            if gpuMul[i] != (fa * fb).bits { mulBad += 1 }
+        }
+        XCTAssertEqual(addBad, 0, "GPU f128 add must match CPU Float128 bit-for-bit")
+        XCTAssertEqual(mulBad, 0, "GPU f128 mul must match CPU Float128 bit-for-bit")
+    }
+
+    /// GPU software-128 Mandelbrot must match the CPU Float128 kernel on every
+    /// pixel's iteration count, shallow and deep (past Double's precision wall).
+    func testGPUFloat128MandelbrotMatchesCPU() throws {
+        guard MetalContext.shared != nil else { throw XCTSkip("No Metal device available") }
+        let gpu = MetalFloat128Engine()
+        let cpu = CPUEngine(kernel: Float128StripKernel())
+
+        let cases: [(Viewport, Int, Int, UInt32)] = [
+            (Viewport.defaultView(width: 256, height: 192), 256, 192, 512),
+            (Viewport(centerX: -0.743643887037151, centerY: 0.131825904205330,
+                      pixelSize: 1e-20), 256, 192, 1024),   // deep past Double
+        ]
+        for (vp, w, h, iters) in cases {
+            let g = gpu.render(viewport: vp, width: w, height: h, maxIterations: iters)
+            let c = cpu.render(viewport: vp, width: w, height: h, maxIterations: iters)
+            var bad = 0
+            g.withBufferPointer { gb in
+                c.withBufferPointer { cb in
+                    for i in 0..<(w * h) where gb[i].iterations != cb[i].iterations { bad += 1 }
+                }
+            }
+            XCTAssertEqual(bad, 0, "GPU Float128 must match CPU Float128 iterations (px=\(vp.pixelSize.asDouble))")
+        }
+    }
+
     func testViewportRoundTrip() {
         let v = Viewport(centerX: -0.5, centerY: 0.0, pixelSize: 0.01)
         let (wx, wy) = v.coordinate(atPixelX: 100, pixelY: 50, width: 200, height: 100)

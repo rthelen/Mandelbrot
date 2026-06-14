@@ -38,7 +38,10 @@ public final class MetalContext: @unchecked Sendable {
         self.device = dev
         self.queue = q
         do {
-            self.library = try dev.makeLibrary(source: softDouble64MSLSource, options: nil)
+            // Soft-64 first (defines sd_mul64 etc.), then soft-128 appended as
+            // one translation unit.
+            let source = softDouble64MSLSource + float128MSLSource
+            self.library = try dev.makeLibrary(source: source, options: nil)
         } catch {
             throw MetalSetupError.libraryCompile("\(error)")
         }

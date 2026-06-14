@@ -19,6 +19,7 @@ enum KernelChoice: String, CaseIterable, Identifiable, Sendable {
     case doubleLockstepCPU = "Double: HW vs SW (per-step)"
     case selfTestCPU = "⚠ Self-test (inject fault)"
     case float128CPU = "Float128 (CPU)"
+    case float128Metal = "Float128 (Metal GPU)"
     var id: String { rawValue }
 
     /// How this mode compares HW vs SW (drives the render path).
@@ -44,6 +45,7 @@ enum KernelChoice: String, CaseIterable, Identifiable, Sendable {
         // hardware kernel is a harmless default so the switch stays total.
         case .doubleDiffCPU, .doubleLockstepCPU, .selfTestCPU: return CPUEngine(kernel: DoubleStripKernel())
         case .float128CPU: return CPUEngine(kernel: Float128StripKernel())
+        case .float128Metal: return MetalFloat128Engine()
         }
     }
 
@@ -62,6 +64,7 @@ enum KernelChoice: String, CaseIterable, Identifiable, Sendable {
         case .doubleLockstepCPU: return 1e-13 // both operands are binary64
         case .selfTestCPU:     return 1e-13
         case .float128CPU:     return 1e-31
+        case .float128Metal:   return 1e-31
         }
     }
 }
