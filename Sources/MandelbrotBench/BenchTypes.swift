@@ -28,6 +28,7 @@ enum KernelName: String, Codable, CaseIterable {
     case softDouble = "softdouble"
     case softDoubleMetal = "softdouble-metal"
     case float128 = "float128"
+    case float128C = "float128-c"
     case float128Metal = "float128-metal"
     case float128LimbMetal = "float128-lf-metal"
     case float128UnpackedMetal = "float128-u-metal"

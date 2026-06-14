@@ -47,7 +47,7 @@ enum KernelChoice: String, CaseIterable, Identifiable, Sendable {
         // Comparison modes render via the comparison engines, not this path; the
         // hardware kernel is a harmless default so the switch stays total.
         case .doubleDiffCPU, .doubleLockstepCPU, .selfTestCPU: return CPUEngine(kernel: DoubleStripKernel())
-        case .float128CPU: return CPUEngine(kernel: Float128StripKernel())
+        case .float128CPU: return CPUEngine(kernel: CFloat128StripKernel())   // C kernel: 1.46x, bit-exact
         case .float128Metal: return MetalFloat128UnpackedEngine()   // unpacked: ~15% faster, bit-identical
         // Hybrid uses a persistent engine held by the view model (so it adapts
         // across frames); this branch is never reached for it.

@@ -14,7 +14,12 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "CMandelbrot",
+            path: "Sources/CMandelbrot"
+        ),
+        .target(
             name: "MandelbrotCore",
+            dependencies: ["CMandelbrot"],
             path: "Sources/MandelbrotCore",
             linkerSettings: [.linkedFramework("Metal")]
         ),

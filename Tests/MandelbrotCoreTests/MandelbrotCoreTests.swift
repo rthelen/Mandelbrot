@@ -580,6 +580,26 @@ final class MandelbrotCoreTests: XCTestCase {
         }
     }
 
+    /// The C Float128 kernel must match the Swift Float128 kernel exactly —
+    /// iterations AND smooth (it's a 1:1 port) — shallow and deep past Double.
+    func testCFloat128MatchesSwift() {
+        let swiftK = CPUEngine(kernel: Float128StripKernel())
+        let cK = CPUEngine(kernel: CFloat128StripKernel())
+        let viewports = [
+            Viewport.defaultView(width: 160, height: 120),
+            Viewport(centerX: -0.743643887037151, centerY: 0.131825904205330, pixelSize: 1e-20),
+        ]
+        for vp in viewports {
+            let a = swiftK.render(viewport: vp, width: 160, height: 120, maxIterations: 1024)
+            let b = cK.render(viewport: vp, width: 160, height: 120, maxIterations: 1024)
+            var bad = 0
+            a.withBufferPointer { ab in b.withBufferPointer { bb in
+                for i in 0..<(160*120) where ab[i] != bb[i] { bad += 1 }
+            }}
+            XCTAssertEqual(bad, 0, "C Float128 kernel must match Swift exactly (px=\(vp.pixelSize.asDouble))")
+        }
+    }
+
     func testViewportRoundTrip() {
         let v = Viewport(centerX: -0.5, centerY: 0.0, pixelSize: 0.01)
         let (wx, wy) = v.coordinate(atPixelX: 100, pixelY: 50, width: 200, height: 100)
