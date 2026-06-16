@@ -20,6 +20,7 @@ struct Options {
     var saveImages: Bool = false
     var imageEvery: Int = 1
     var profile: Bool = false
+    var single: Bool = false      // single-core (per-core microarch comparison)
 
     static func parse(_ args: [String]) -> Options {
         var opts = Options()
@@ -49,6 +50,7 @@ struct Options {
             case "--output": if let v = next() { opts.outputDir = v }
             case "--matrix": opts.matrix = true
             case "--profile": opts.profile = true
+            case "--single": opts.single = true
             case "--save-images": opts.saveImages = true
             case "--image-every": if let v = next(), let n = Int(v) { opts.imageEvery = n }
             case "--help", "-h":
@@ -76,6 +78,7 @@ func printUsage() {
       --height <N>         Canvas height (default: 600)
       --output <dir>       Output directory (default: bench-results)
       --matrix             Run full sweep: all targets × all kernels × all iter caps
+      --single             Single-core CPU render (per-core microarch comparison)
       --save-images        Write PNG for each frame
       --image-every <N>    With --save-images, save every Nth frame (default: 1)
     """)
@@ -87,12 +90,12 @@ func runCell(target: PlaybackTarget, kernel: KernelName, iters: UInt32,
              opts: Options, runDir: URL) {
     let engine: any MandelbrotEngine
     switch kernel {
-    case .double:          engine = CPUEngine(kernel: DoubleStripKernel())
-    case .doubleSIMD:      engine = CPUEngine(kernel: SIMDDoubleStripKernel())
-    case .softDouble:      engine = CPUEngine(kernel: SoftDoubleStripKernel())
+    case .double:          engine = CPUEngine(kernel: DoubleStripKernel(), serial: opts.single)
+    case .doubleSIMD:      engine = CPUEngine(kernel: SIMDDoubleStripKernel(), serial: opts.single)
+    case .softDouble:      engine = CPUEngine(kernel: SoftDoubleStripKernel(), serial: opts.single)
     case .softDoubleMetal: engine = MetalSoftDouble64Engine()
-    case .float128:        engine = CPUEngine(kernel: Float128StripKernel())
-    case .float128C:       engine = CPUEngine(kernel: CFloat128StripKernel())
+    case .float128:        engine = CPUEngine(kernel: Float128StripKernel(), serial: opts.single)
+    case .float128C:       engine = CPUEngine(kernel: CFloat128StripKernel(), serial: opts.single)
     case .float128Metal:   engine = MetalFloat128Engine()
     case .float128LimbMetal: engine = MetalLimbFloat128Engine()
     case .float128UnpackedMetal: engine = MetalFloat128UnpackedEngine()
@@ -290,6 +293,7 @@ let itersList = opts.iters
 
 print("Machine: \(MachineInfo.current.soc) · \(MachineInfo.current.cores) cores · \(MachineInfo.current.memoryGB) GB")
 print("Build:   Swift \(BuildInfo.current.swiftVersion) · \(BuildInfo.current.config)")
+print("Threads: \(opts.single ? "SINGLE-CORE (per-core microarch)" : "all cores")")
 
 // --profile: sweep threadgroup configs for the Float128 Metal kernel at the
 // first --sample frame of the chosen --target, then exit.

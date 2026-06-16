@@ -12,10 +12,16 @@ public protocol MandelbrotEngine: Sendable {
 }
 
 /// CPU engine that dispatches fixed-width horizontal strips across cores.
+/// `serial` runs every strip on one thread — for per-core microarchitecture
+/// benchmarking (isolates IPC from core count).
 public struct CPUEngine<Kernel: StripKernel>: MandelbrotEngine {
     public let kernel: Kernel
+    public let serial: Bool
 
-    public init(kernel: Kernel) { self.kernel = kernel }
+    public init(kernel: Kernel, serial: Bool = false) {
+        self.kernel = kernel
+        self.serial = serial
+    }
 
     public func render(
         viewport: Viewport,
@@ -33,7 +39,7 @@ public struct CPUEngine<Kernel: StripKernel>: MandelbrotEngine {
         let pxSize = viewport.pixelSize
         let kernel = self.kernel
 
-        DispatchQueue.concurrentPerform(iterations: totalStrips) { idx in
+        let body: @Sendable (Int) -> Void = { idx in
             let row = idx / stripsPerRow
             let strip = idx % stripsPerRow
             let pixelX = strip * stripW
@@ -61,6 +67,12 @@ public struct CPUEngine<Kernel: StripKernel>: MandelbrotEngine {
                     field[row: row, column: pixelX + i] = scratch[i]
                 }
             }
+        }
+
+        if serial {
+            for idx in 0..<totalStrips { body(idx) }
+        } else {
+            DispatchQueue.concurrentPerform(iterations: totalStrips, execute: body)
         }
         return field
     }
