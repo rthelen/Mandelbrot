@@ -1,0 +1,7 @@
+# Ignore everything in this dir (compiled binaries have no extension; *.s is
+# generated) but keep the sources, Makefile, and docs. Rebuild with `make`.
+*
+!*.c
+!*.md
+!Makefile
+!.gitignore
