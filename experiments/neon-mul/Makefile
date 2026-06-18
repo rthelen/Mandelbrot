@@ -4,7 +4,7 @@
 #   make clean
 CC      = clang
 CFLAGS  = -O3
-PORTABLE = mul128 ifma52 ifma_radix fpfma fpipes sme_emu  # run anywhere
+PORTABLE = mul128 ifma52 ifma_radix fpfma fpipes sme_emu sme_probe  # run anywhere
 MUL53    = mul53probe mul53bench mul53mul dualengine       # need Apple-private MUL53
 SME      = sme_mul                                         # RUN on M4+ only
 BINS     = $(PORTABLE) $(MUL53) $(SME)
