@@ -4,11 +4,16 @@
 #   make clean
 CC      = clang
 CFLAGS  = -O3
-PORTABLE = mul128 ifma52 ifma_radix fpfma fpipes
-MUL53    = mul53probe mul53bench mul53mul dualengine   # need Apple-private MUL53
-BINS     = $(PORTABLE) $(MUL53)
+PORTABLE = mul128 ifma52 ifma_radix fpfma fpipes sme_emu  # run anywhere
+MUL53    = mul53probe mul53bench mul53mul dualengine       # need Apple-private MUL53
+SME      = sme_mul                                         # RUN on M4+ only
+BINS     = $(PORTABLE) $(MUL53) $(SME)
 
 all: $(BINS)
+
+# sme_mul needs the SME feature flags (compiles anywhere; only RUNS on M4+)
+sme_mul: sme_mul.c
+	$(CC) -O3 -march=armv9-a+sme2+sme-i16i64 -o $@ $<
 
 %: %.c
 	$(CC) $(CFLAGS) -o $@ $<

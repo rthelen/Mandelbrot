@@ -21,6 +21,13 @@ make           # build everything
 | `ifma52` | IFMA-52 (AVX-512-IFMA-style) bignum multiply, emulated + bit-exact. |
 | `ifma_radix` | same, radix-parameterized (R=48..53) — shows the algorithm maps to MUL53's 53-bit boundary. |
 | `fpfma` | FP64-FMA bignum multiply (borrow the FP mantissa multiplier), width sweep 128/256/512-bit. |
+| `sme_emu` | SME outer-product bignum multiply, **emulated** (bit-exact, runs anywhere). Schoolbook = outer product; one MOPA fills the partial-product tile, then sum anti-diagonals. Validates 128/256/512-bit (512 = a full 32×32 tile). |
+
+**Require Apple SME (M4+) to RUN** (compile anywhere):
+
+| probe | what it does |
+|-------|--------------|
+| `sme_mul` | **real `arm_sme.h` kernel** — 128×128 multiply via the `za64_u16` outer-product MOPA, self-checking vs `__uint128_t`. ⚠️ **Run on M4+ only:** it contains an `__arm_new("za")` function, which SIGILLs at *startup* on pre-SME cores (M1/M2/M3) — the ZA-state init runs before `main`, so the runtime feature gate can't help there. First M4 run prints `BIT-EXACT` or `FAIL` (+ which assumption A1–A3 to flip). |
 
 **Require Apple-private MUL53** (custom opcode `0x00200000`–`0x002007FF`; a 2-wide
 NEON 53-bit multiply-extract used by JavaScriptCore):
