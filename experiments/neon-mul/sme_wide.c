@@ -15,6 +15,7 @@
 #include <string.h>
 #include <sys/sysctl.h>
 #include <mach/mach_time.h>
+#include <pthread.h>     // QoS -> P-core placement
 
 typedef unsigned __int128 u128;
 typedef struct { uint64_t w[4]; } u256;
@@ -89,6 +90,9 @@ static uint64_t S=0x123456789abcdef0ull;
 static inline uint64_t lcg(void){ S=S*6364136223846793005ull+1442695040888963407ull; return S; }
 
 int main(void){
+    // bias the scheduler to a P-core (no hard affinity on macOS; QoS is the lever)
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+
     if (!feat("hw.optional.arm.FEAT_SME") || !feat("hw.optional.arm.FEAT_SME_I16I64")){
         printf("SME / I16I64 not available — need M4+.\n"); return 0; }
 
@@ -104,27 +108,35 @@ int main(void){
     // full-lane operands for peak (not zero-padded -> real 256 MAC/umopa)
     for(int k=0;k<32;k++){ a[k]=(uint16_t)lcg(); b[k]=(uint16_t)lcg(); }
 
-    // 2) clock
-    long Rc=3000000; double cb=1e30;
-    for(int r=0;r<5;r++){double t=now_ns(); clk(Rc); double d=now_ns()-t; if(d<cb)cb=d;}
-    double ghz=(64.0*Rc)/cb;
+    // WARM UP ~700ms of the SME workload so macOS migrates us onto a P-core AND
+    // ramps DVFS to max clock before any measurement. Then all timed runs (back
+    // to back, no idle gaps) stay in the hot lane; best-of-N takes the fastest.
+    printf("warming up (P-core migration + clock ramp)...\n"); fflush(stdout);
+    { double t0=now_ns(); while(now_ns()-t0 < 700e6) sme_peak(a,b,200000); }
 
-    // 3) SME peak umopa
-    long K=2000000; double sb=1e30;       // 8*K = 16M umopa
-    for(int r=0;r<5;r++){double t=now_ns(); sme_peak(a,b,K); double d=now_ns()-t; if(d<sb)sb=d;}
+    // 2) clock — measured HOT (the achieved GHz is our "are we boosted?" check)
+    long Rc=6000000; double cb=1e30,cw=0;            // ~80-160ms/run
+    for(int r=0;r<6;r++){double t=now_ns(); clk(Rc); double d=now_ns()-t; if(d<cb)cb=d; if(d>cw)cw=d;}
+    double ghz=(64.0*Rc)/cb, ghz_lo=(64.0*Rc)/cw;
+
+    // 3) SME peak umopa — long runs (240M umopa each), report trial spread
+    long K=30000000; double sb=1e30,sw=0;
+    for(int r=0;r<6;r++){double t=now_ns(); sme_peak(a,b,K); double d=now_ns()-t; if(d<sb)sb=d; if(d>sw)sw=d;}
     double umopa=8.0*K, ns_umopa=sb/umopa;
     double mac_per_ns_sme = 256.0/ns_umopa;            // 256 u16-MACs per umopa
 
     // 4) scalar 64x64 mul peak -> u16-MAC equiv (one 64x64 schoolbook = (64/16)^2 = 16 u16 MACs)
     uint64_t in[16],out[16]; for(int i=0;i<16;i++) in[i]=lcg()|1;
-    long Rs=8000000; double xb=1e30;
-    for(int r=0;r<5;r++){double t=now_ns(); smul(in,out,Rs); double d=now_ns()-t; if(d<xb)xb=d;}
+    long Rs=20000000; double xb=1e30;
+    for(int r=0;r<6;r++){double t=now_ns(); smul(in,out,Rs); double d=now_ns()-t; if(d<xb)xb=d;}
     double mul64_per_ns = (8.0*Rs)/xb;
     double mac_per_ns_scalar = mul64_per_ns*16.0;
 
-    printf("\nclock: %.2f GHz\n", ghz);
-    printf("SME umopa: %.3f ns each = %.2f umopa/cycle  (peak, 8 tiles, full lanes)\n", ns_umopa, 1.0/(ns_umopa*ghz));
-    printf("\nu16 multiply-accumulate throughput (the bignum-relevant metric):\n");
+    printf("\nclock (hot): %.2f GHz   (slowest trial %.2f GHz)%s\n", ghz, ghz_lo,
+           ghz<3.5 ? "   <-- LOW: likely eCore/unboosted, RE-RUN" : "   (P-core, boosted)");
+    printf("SME umopa: %.3f ns each = %.2f umopa/cycle  (peak, 8 tiles, full lanes; trial spread %.0f%%)\n",
+           ns_umopa, 1.0/(ns_umopa*ghz), 100.0*(sw-sb)/sb);
+    printf("\nu16 multiply-accumulate throughput (wall-clock, clock-independent):\n");
     printf("  SME (umopa peak) : %8.1f u16-MAC/ns\n", mac_per_ns_sme);
     printf("  scalar (mul x16) : %8.1f u16-MAC/ns\n", mac_per_ns_scalar);
     printf("  SME / scalar     : %.1fx  (engine ceiling; real wide-multiply lower by ZA-readout overhead)\n",
